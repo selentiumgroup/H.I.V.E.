@@ -26,6 +26,7 @@ import { KnowledgeTransfer } from './knowledge-transfer.js';
 import { EvolutionAnchorManager } from './evolution-anchor.js';
 import { Telemetry } from './telemetry.js';
 import { SnapshotManager } from './consensus-core.js';
+import { BFT_PHASES, uniqueBftVotes } from './bft-state-machine.js';
 import { TrainingEngine } from './training-engine.js';
 import { ContentStore } from './content-store.js';
 
@@ -61,7 +62,7 @@ function approvedVotes(votes,type,idField,id,committee){const allowed=new Set(co
 
 const dht=new DHT({config:c,identity,store,descriptor,guard});
 const validator=new Validator({config:c,identity,wallet,store});
-const ledger=new Ledger({config:c,identity,wallet,store});validator.setLedger(ledger);const snapshots=new SnapshotManager({config:c,identity,store});const collective=new CollectiveEvolution({config:c,identity,store,evolution,ledger});
+const ledger=new Ledger({config:c,identity,wallet,store});validator.setLedger(ledger);const snapshots=new SnapshotManager({config:c,identity,store,ledger});const collective=new CollectiveEvolution({config:c,identity,store,evolution,ledger});
 const knowledge=new KnowledgeTransfer({config:c,identity,store,evolution,ledger});
 const contentStore=new ContentStore({config:c,store,identity});
 const training=new TrainingEngine({config:c,identity,store,llm,contentStore});
@@ -80,7 +81,22 @@ async function handleInfer(payload){
   catch(e){if(payload?.taskId&&selection.genome)evolution.recordTask({taskId:payload.taskId,genomeId:selection.genome.genomeId,success:false,latencyMs:Date.now()-started,outputChars:0,workerCount:1});throw e;}
 }
 async function handleValidation(payload){if(!c.validatorEnabled)throw new Error('validator disabled');if(payload?.type==='block')return {vote:validator.validateBlock(payload.block)};return {vote:validator.validateClaim(payload.claim)};}
-async function handleCommit(payload){return {ok:ledger.importBlock(payload.block)};}
+async function handleConsensus(payload,sourceNodeId=''){
+  if(!c.validatorEnabled)throw new Error('validator disabled');
+  if(payload?.kind==='proposal-request'){
+    let head=ledger.head(),round=Number(payload.round)||0,index=Number(head.index)+1;
+    if((payload.prevHash!==head.hash||Number(payload.index)!==index)&&sourceNodeId){const source=peerForId(sourceNodeId);if(source)await syncLedgerFrom(source).catch(()=>{});head=ledger.head();index=Number(head.index)+1;}
+    if(payload.prevHash!==head.hash||Number(payload.index)!==index)throw new Error('stale proposal request');
+    const committee=(payload.committee||ledger.blockCommittee(index,head.hash,round)).slice().sort();const leader=(c.autoBootstrapValidators&&c.securityMode!=='mainnet'&&index<=c.bootstrapValidatorUntilHeight)?(await import('./consensus-core.js')).deterministicLeader({height:index,round,prevHash:head.hash,validators:committee}):ledger.blockLeader(index,head.hash,round);
+    if(identity.nodeId!==leader)throw new Error('node is not elected proposer');
+    const block=ledger.build(payload.receipts||[],payload.transactions||[],payload.slashEvidence||[],payload.evolutionAnchors||[],round,committee);return {block};
+  }
+  if(payload?.kind==='bft-vote'){const block=payload.block;if(Number(ledger.head().index)<Number(block?.index)-1&&sourceNodeId){const p=peerForId(sourceNodeId);if(p)await syncLedgerFrom(p).catch(()=>{});}return {vote:validator.voteBft(block,payload.phase,payload.phaseProof||[])};}
+  if(payload?.kind==='checkpoint-vote')return {vote:snapshots.vote(payload.bundle)};
+  if(payload?.kind==='checkpoint-latest'){const x=snapshots.latest();return {checkpoint:x?.proof||null};}
+  throw new Error('unknown consensus message');
+}
+async function handleCommit(payload,sourceNodeId=''){let ok=ledger.importBlock(payload.block);if(!ok&&sourceNodeId&&Number(payload.block?.index)>Number(ledger.head().index)+1){const p=peerForId(sourceNodeId);if(p){await syncLedgerFrom(p).catch(()=>{});ok=ledger.importBlock(payload.block);}}return {ok};}
 function validateMempoolTransaction(tx){
   if(!Wallet.verifyTransaction(tx,c.networkId))throw new Error('invalid transaction signature');if(BigInt(tx.feeAtomic)<parseNRN(c.txFeeNRN))throw new Error(`minimum fee is ${c.txFeeNRN} NRN`);if(store.isConfirmedTx(tx.txId))return {ok:true,status:'confirmed'};if(store.hasMempool(tx.txId))return {ok:true,status:'known'};
   const expected=store.nextNonce(tx.from);if(Number(tx.nonce)!==expected)throw new Error(`bad nonce: expected ${expected}`);const pending=[...store.mempool(10000),tx];const v=ledger.validateTransactions(pending,rewardAddress());if(!v.ok)throw new Error(v.reason);store.addMempool(tx);return {ok:true,status:'pending'};
@@ -108,7 +124,7 @@ async function handleLearning(payload,sourceNodeId=''){
   if(payload?.kind==='content-offer'){if(!payload.hash||!sourceNodeId)throw new Error('invalid content offer');contentStore.noteProvider(payload.hash,sourceNodeId,Number(payload.score)||0.7);queueMicrotask(()=>ensureContent(payload.hash,{preferredNodeId:sourceNodeId,kind:payload.contentKind||'blob',meta:payload.meta||{}}).catch(()=>{}));return {ok:true,have:contentStore.has(payload.hash)};}
   throw new Error('unknown learning message');
 }
-relay=new RelayService({config:c,identity,store,descriptor,onInfer:handleInfer,onValidate:handleValidation,onCommit:handleCommit,onTransaction:handleTransaction,onEvolution:handleEvolution,onLearning:handleLearning,onEvolutionAnchorValidate:(p)=>evolutionAnchors.vote(p),onTelemetry:handleTelemetry,guard});
+relay=new RelayService({config:c,identity,store,descriptor,onInfer:handleInfer,onValidate:handleValidation,onCommit:handleCommit,onTransaction:handleTransaction,onEvolution:handleEvolution,onLearning:handleLearning,onEvolutionAnchorValidate:(p)=>evolutionAnchors.vote(p),onTelemetry:handleTelemetry,onConsensus:handleConsensus,guard});
 
 const p2pInflight=new Map();let p2pGlobalInflight=0;
 function peerQuality(peer){const latency=Math.max(1,Number(peer?.latencyMs)||9999),trust=Math.max(0.01,Number(peer?.trust)||0.15),failures=Math.max(0,Number(peer?.failures)||0);return trust*1000/(Math.sqrt(latency)*(1+failures));}
@@ -126,7 +142,53 @@ async function collectBlockVotes(block){
   const committee=ledger.blockCommittee(block.index,block.prevHash,Number(block.round||0)),votes=[];if(committee.includes(identity.nodeId)&&c.validatorEnabled)votes.push(validator.validateBlock(block));const targets=committee.filter(id=>id!==identity.nodeId).map(peerForId).filter(Boolean);
   const rs=await Promise.allSettled(targets.map(async p=>{const x=await callPeer(p,{directPath:'/p2p/ledger/validate',relayKind:'validate',payload:{type:'block',block},timeout:12000});return x.vote;}));for(const r of rs)if(r.status==='fulfilled'&&r.value)votes.push(r.value);for(const v of votes)store.recordValidatorVote(v);return {committee,votes:approvedVotes(votes,'block-vote','blockHash',block.hash,committee)};
 }
-async function broadcastBlock(block){const ps=store.peers().filter(p=>p.nodeId!==identity.nodeId&&(peerEndpoint(p)||p.relayUrl)).slice(0,64);const env=identity.envelope({networkId:c.networkId,block});await Promise.allSettled(ps.map(async p=>{const u=peerEndpoint(p);if(u){try{return await postJson(u,'/p2p/ledger/commit',env,8000);}catch(e){if(!p.relayUrl)throw e;}}return relay.sendViaRelay(p,'commit',{block});}));}
+async function requestBftProposal({receipts=[],transactions=[],slashEvidence=[],evolutionAnchors=[],round=0}={}){
+  const head=ledger.head(),index=Number(head.index)+1,leader=ledger.blockLeader(index,head.hash,round);
+  if(!leader)throw new Error('no elected proposer');
+  const committee=ledger.blockCommittee(index,head.hash,round);if(leader===identity.nodeId)return ledger.build(receipts,transactions,slashEvidence,evolutionAnchors,round,committee);
+  const peer=peerForId(leader);if(!peer)throw new Error(`elected proposer unreachable: ${leader}`);
+  let x;try{x=await callPeer(peer,{directPath:'/p2p/consensus/proposal',relayKind:'consensus',payload:{kind:'proposal-request',index,prevHash:head.hash,round,committee,receipts,transactions,slashEvidence,evolutionAnchors},timeout:c.bftRoundTimeoutMs});}catch(e){const before=head.hash;await syncLedgerFrom(peer).catch(()=>{});if(ledger.head().hash!==before){const changed=new Error('BFT_HEAD_CHANGED');changed.code='BFT_HEAD_CHANGED';throw changed;}throw e;}
+  const block=x.block;if(!block||block.proposer!==leader)throw new Error('invalid proposal response');const v=ledger.verifyProposal(block);if(!v.ok)throw new Error(v.reason);return block;
+}
+async function collectBftPhase(block,phase,phaseProof=[]){
+  const committee=(block.committee||ledger.blockCommittee(block.index,block.prevHash,Number(block.round||0))).slice(),votes=[];
+  if(committee.includes(identity.nodeId)&&c.validatorEnabled){try{votes.push(validator.voteBft(block,phase,phaseProof));}catch{}}
+  const targets=committee.filter(id=>id!==identity.nodeId).map(peerForId).filter(Boolean);
+  const timeout=phase===BFT_PHASES.PREVOTE?c.bftPrevoteTimeoutMs:c.bftPrecommitTimeoutMs;
+  const rs=await Promise.allSettled(targets.map(async p=>{const x=await callPeer(p,{directPath:'/p2p/consensus/vote',relayKind:'consensus',payload:{kind:'bft-vote',phase,block,phaseProof},timeout});return x.vote;}));
+  for(const r of rs)if(r.status==='fulfilled'&&r.value)votes.push(r.value);
+  const valid=uniqueBftVotes(votes,{networkId:c.networkId,phase,height:block.index,round:block.round,blockHash:block.hash,prevHash:block.prevHash,committee});for(const v of valid)store.addBftVote(v);return {committee,votes:valid};
+}
+async function certifyCheckpoint(bundle){
+  const committee=snapshots.committee(bundle),votes=[];if(committee.includes(identity.nodeId)&&c.validatorEnabled)votes.push(snapshots.vote(bundle));const targets=committee.filter(id=>id!==identity.nodeId).map(peerForId).filter(Boolean);
+  const rs=await Promise.allSettled(targets.map(async p=>{const x=await callPeer(p,{directPath:'/p2p/consensus/checkpoint-vote',relayKind:'consensus',payload:{kind:'checkpoint-vote',bundle},timeout:c.bftRoundTimeoutMs});return x.vote;}));for(const r of rs)if(r.status==='fulfilled'&&r.value)votes.push(r.value);return snapshots.certify(bundle,votes);
+}
+async function createCertifiedCheckpoint(height=Number(ledger.head().index)){const b=snapshots.create(height);return c.checkpointQuorumEnabled?await certifyCheckpoint(b):b;}
+async function broadcastBlock(block){
+  const ps=store.peers().filter(p=>p.nodeId!==identity.nodeId&&(peerEndpoint(p)||p.relayUrl)).slice(0,64);
+  const env=identity.envelope({networkId:c.networkId,block});
+  await Promise.allSettled(ps.map(async p=>{
+    let lastError=null;
+    for(let attempt=0;attempt<3;attempt++){
+      if(attempt)await new Promise(r=>setTimeout(r,150*attempt));
+      const u=peerEndpoint(p);
+      try{
+        let x;
+        if(u)x=await postJson(u,'/p2p/ledger/commit',env,8000);
+        else if(p.relayUrl)x=await relay.sendViaRelay(p,'commit',{block});
+        else throw new Error('peer unreachable');
+        if(x?.ok!==false)return x;
+        lastError=new Error(x?.reason||'peer rejected finalized block');
+      }catch(e){
+        lastError=e;
+        if(u&&p.relayUrl){
+          try{const x=await relay.sendViaRelay(p,'commit',{block});if(x?.ok!==false)return x;}catch(e2){lastError=e2;}
+        }
+      }
+    }
+    if(lastError)throw lastError;
+  }));
+}
 async function broadcastTransaction(tx){const ps=store.peers().filter(p=>p.nodeId!==identity.nodeId&&(peerEndpoint(p)||p.relayUrl)).slice(0,64);await Promise.allSettled(ps.map(async p=>{const u=peerEndpoint(p),env=identity.envelope({networkId:c.networkId,tx});if(u){try{return await postJson(u,'/p2p/tx',env,8000);}catch(e){if(!p.relayUrl)throw e;}}return relay.sendViaRelay(p,'transaction',tx);}));}
 async function broadcastEvolutionCandidate(candidate){const raw=store.evolutionGenome(candidate.genomeId);if(!raw)throw new Error('candidate not found');const candidateProof=identity.envelope({networkId:c.networkId,type:'evolution-genome',candidate:raw});const ps=store.peers().filter(p=>p.nodeId!==identity.nodeId&&(peerEndpoint(p)||p.relayUrl)).slice(0,32);await Promise.allSettled(ps.map(async p=>{const u=peerEndpoint(p),env=identity.envelope({networkId:c.networkId,type:'evolution-candidate',candidateProof});if(u){try{return await postJson(u,'/p2p/evolution/candidate',env,8000);}catch(e){if(!p.relayUrl)throw e;}}return relay.sendViaRelay(p,'evolution',{candidateProof});}));}
 async function broadcastCollective(kind,proof){const ps=store.peers().filter(p=>p.nodeId!==identity.nodeId&&(peerEndpoint(p)||p.relayUrl)).slice(0,64);await Promise.allSettled(ps.map(async p=>{const u=peerEndpoint(p),payload={collectiveKind:kind,proof},env=identity.envelope({networkId:c.networkId,type:'collective-evolution-message',payload});if(u){try{return await postJson(u,'/p2p/evolution/collective',env,8000);}catch(e){if(!p.relayUrl)throw e;}}return relay.sendViaRelay(p,'evolution',payload);}));}
@@ -168,7 +230,7 @@ async function fetchAdapterFromPeer(peer,adapterId){
   const infoRaw=await req('info'),info=infoRaw.info||infoRaw;if(info.bytes>c.trainingMaxAdapterBytes)throw new Error('adapter too large');const chunks=[];for(let i=0;i<info.chunks;i++){const raw=await req('chunk',i),x=raw.chunk||raw;if(x.index!==i||x.sha256!==info.sha256)throw new Error('bad adapter chunk');chunks.push(Buffer.from(x.data,'base64'));}const b=Buffer.concat(chunks);if(b.length!==info.bytes)throw new Error('adapter transfer size mismatch');return training.importBundleBuffer(adapterId,b);
 }
 
-async function syncLedgerFrom(peer){const u=peerEndpoint(peer);if(!u)return;let from=Number(ledger.head().index)+1;for(let i=0;i<20;i++){const x=await postJson(u,'/p2p/ledger/blocks',identity.envelope({networkId:c.networkId,fromIndex:from,limit:50}),8000);const blocks=x.blocks||[];if(!blocks.length)break;let advanced=false;for(const b of blocks){if(Number(b.index)!==from)break;if(ledger.importBlock(b)){from++;advanced=true;}else break;}if(!advanced||blocks.length<50)break;}}
+async function syncLedgerFrom(peer){const u=peerEndpoint(peer);if(!u)return;if(Number(ledger.head().index)===0&&c.fullBftEnabled){try{const r=await callPeer(peer,{directPath:'/p2p/consensus/checkpoint/latest',relayKind:'consensus',payload:{kind:'checkpoint-latest'},timeout:8000});if(r?.checkpoint&&Number(r.checkpoint.body?.height)>0)snapshots.importCertified(r.checkpoint);}catch{}}let from=Number(ledger.head().index)+1;for(let i=0;i<20;i++){const x=await postJson(u,'/p2p/ledger/blocks',identity.envelope({networkId:c.networkId,fromIndex:from,limit:50}),8000);const blocks=x.blocks||[];if(!blocks.length)break;let advanced=false;for(const b of blocks){if(Number(b.index)!==from)break;if(ledger.importBlock(b)){from++;advanced=true;}else break;}if(!advanced||blocks.length<50)break;}}
 const peers=new PeerManager({config:c,identity,store,descriptor,dht,onPeer:async p=>syncLedgerFrom(p).catch(()=>{}),onRelayCandidate:async u=>relay.addRelayCandidate(u),onPublicUrl:async()=>{await dht.announce().catch(()=>{});},guard});
 telemetry=new Telemetry({config:c,identity,store,hardware:hw,llm,ledger,evolution,collective,knowledge,validatorStatus,descriptor,relay,contentStore});
 rendezvous=new MainlineRendezvous({config:c,identity,onCandidate:(u,source)=>peers.discoverCandidate(u,source)});
@@ -180,17 +242,19 @@ async function anchorCollectiveTournament(finalized){if(!c.evolutionBftAnchorEna
 
 async function finalizeAndCommitBlock(receipts=[],transactions=[]){
   const slashEvidence=store.pendingSlashings(20),anchors=store.pendingEvolutionAnchors(20);if(!receipts.length&&!transactions.length&&!slashEvidence.length&&!anchors.length)return null;
+  if(!c.fullBftEnabled){for(let round=0;round<c.bftMaxRounds;round++){const block=ledger.build(receipts,transactions,slashEvidence,anchors,round);const r=await collectBlockVotes(block);if(r.votes.length<ledger.threshold(r.committee)){if(round+1<c.bftMaxRounds)await new Promise(x=>setTimeout(x,Math.min(c.bftRoundTimeoutMs,250)));continue;}block.validatorVotes=r.votes;block.finalized=true;ledger.commit(block);const snap=snapshots.maybeCreate(block);if(snap&&c.checkpointQuorumEnabled)certifyCheckpoint(snap).catch(e=>console.error('checkpoint consensus:',e.message));await broadcastBlock(block);return block;}return null;}
   for(let round=0;round<c.bftMaxRounds;round++){
-    const block=ledger.build(receipts,transactions,slashEvidence,anchors,round);const r=await collectBlockVotes(block);
-    if(r.votes.length<ledger.threshold(r.committee)){if(round+1<c.bftMaxRounds)await new Promise(x=>setTimeout(x,Math.min(c.bftRoundTimeoutMs,250)));continue;}
-    block.validatorVotes=r.votes;block.finalized=true;ledger.commit(block);snapshots.maybeCreate(block);await broadcastBlock(block);return block;
+    let block;try{block=await requestBftProposal({receipts,transactions,slashEvidence,evolutionAnchors:anchors,round});}catch(e){if(e?.code==='BFT_HEAD_CHANGED'){round=-1;continue;}if(round+1<c.bftMaxRounds){await new Promise(r=>setTimeout(r,Math.min(c.bftRoundTimeoutMs,500)));continue;}throw e;}
+    const pv=await collectBftPhase(block,BFT_PHASES.PREVOTE);if(pv.votes.length<ledger.threshold(pv.committee)){if(round+1<c.bftMaxRounds){await new Promise(r=>setTimeout(r,Math.min(c.bftRoundTimeoutMs,500)));continue;}return null;}
+    const pc=await collectBftPhase(block,BFT_PHASES.PRECOMMIT,pv.votes);if(pc.votes.length<ledger.threshold(pc.committee)){if(round+1<c.bftMaxRounds){await new Promise(r=>setTimeout(r,Math.min(c.bftRoundTimeoutMs,500)));continue;}return null;}
+    block.consensusCertificate={prevotes:pv.votes,precommits:pc.votes};block.finalized=true;ledger.commit(block);const snap=snapshots.maybeCreate(block);if(snap&&c.checkpointQuorumEnabled)certifyCheckpoint(snap).catch(e=>console.error('checkpoint consensus:',e.message));await broadcastBlock(block);return block;
   }
   return null;
 }
 async function mintValidatedWork(taskId,outputs,consensusRef){
   const finalized=[];
   for(const o of outputs){const score=deterministicWorkScore({outputChars:o.content.length});const grossNrn=rewardForScore(score,c.rewardPerScore);const claim=makeClaim(identity,{taskId,workerProof:o.proof,score,grossNrn,originRewardAddress:rewardAddress(),consensusHeight:consensusRef.index,consensusHash:consensusRef.hash});const r=await collectClaimVotes(claim);if(r.votes.length<ledger.threshold(r.committee))continue;finalized.push(finalizeClaim(claim,r.votes,{worker:c.rewardWorkerShare,validator:c.rewardValidatorShare,router:c.rewardRouterShare}));}
-  const pending=store.mempool(c.maxBlockTx);const block=await finalizeAndCommitBlock(finalized,pending);return {receipts:finalized,block};
+  const pending=store.mempool(c.maxBlockTx).filter(tx=>!store.isConfirmedTx(tx.txId));const block=await finalizeAndCommitBlock(finalized,pending);return {receipts:finalized,block};
 }
 function isFastChat(prompt){
   if(!c.chatFastPath) return false;
@@ -225,18 +289,18 @@ async function answerDistributed(prompt){
   evolution.recordTask({taskId,genomeId:selection.genome.genomeId,success:true,latencyMs:Date.now()-started,outputChars:final.length,workerCount:outputs.length});const ka=knowledge.createDistillation({taskId,prompt,answer:final,wanted,quality:Math.min(.98,.76+.04*Math.min(outputs.length,4))});if(ka&&c.knowledgeAutoShare)broadcastKnowledgeArtifact(ka).catch(()=>{});try{evolution.maybeAdvance();}catch(e){console.warn('evolution advance:',e.message);}
   return {taskId,answer:final,wanted,evolution:{genomeId:selection.genome.genomeId,generation:selection.genome.generation,canary:selection.isCanary},route:outputs.map(o=>({nodeId:o.nodeId,latencyMs:o.latencyMs,model:o.model,provider:o.provider,rewardAddress:o.rewardAddress})),reward:{claims:mint.receipts.length,block:mint.block?{index:mint.block.index,hash:mint.block.hash,mintedNRN:mint.block.mintedNRN,finalized:true}:null,pending:!c.chatWaitRewards}};
 }
-async function submitWalletTx(tx){validateMempoolTransaction(tx);await broadcastTransaction(tx);const pending=store.mempool(c.maxBlockTx);const block=await finalizeAndCommitBlock([],pending);return {tx,status:block?'confirmed':'pending',block:block?{index:block.index,hash:block.hash,finalized:true}:null};}
+async function submitWalletTx(tx){validateMempoolTransaction(tx);await broadcastTransaction(tx);const pending=store.mempool(c.maxBlockTx).filter(tx=>!store.isConfirmedTx(tx.txId));const block=await finalizeAndCommitBlock([],pending);return {tx,status:block?'confirmed':'pending',block:block?{index:block.index,hash:block.hash,finalized:true}:null};}
 async function sendNRN({to,amount,fee}){if(!isValidAddress(to))throw new Error('invalid destination NRN address');const amountAtomic=parseNRN(amount),feeAtomic=parseNRN(fee||c.txFeeNRN);const tx=wallet.createTransfer({networkId:c.networkId,to,amountAtomic,feeAtomic,nonce:store.nextNonce(wallet.address)});return submitWalletTx(tx);}
 async function bondValidator({amount,fee}){const amountAtomic=parseNRN(amount),feeAtomic=parseNRN(fee||c.txFeeNRN);const tx=wallet.createBond({networkId:c.networkId,nodeId:identity.nodeId,nodePublicKey:identity.publicPem,rewardAddress:rewardAddress(),amountAtomic,feeAtomic,nonce:store.nextNonce(wallet.address)});return submitWalletTx(tx);}
 async function unbondValidator({amount,fee}){const amountAtomic=parseNRN(amount),feeAtomic=parseNRN(fee||c.txFeeNRN);const tx=wallet.createUnbond({networkId:c.networkId,nodeId:identity.nodeId,amountAtomic,feeAtomic,nonce:store.nextNonce(wallet.address)});return submitWalletTx(tx);}
 function walletStatus(){return {address:wallet.address,rewardAddress:rewardAddress(),balanceNRN:store.balance(wallet.address),availableNRN:formatNRN(store.availableBalanceAtomic(wallet.address)),nextNonce:store.nextNonce(wallet.address),minimumFeeNRN:c.txFeeNRN,pending:store.mempool(1000).filter(tx=>tx.from===wallet.address||tx.to===wallet.address).length,bond:store.bondForNode(identity.nodeId),transactions:store.transactions(wallet.address,50),encryptedKeystore:fs.existsSync(path.join(c.dataDir,'wallet-v2.json'))};}
-function validatorStatus(){const head=ledger.head();return {enabled:c.validatorEnabled,nodeId:identity.nodeId,bond:store.bondForNode(identity.nodeId),minimumStakeNRN:c.minValidatorStakeNRN,eligibleValidators:ledger.eligibleValidatorIds(Number(head.index)),nextCommittee:ledger.blockCommittee(Number(head.index)+1,head.hash),pendingSlashings:store.pendingSlashings(20),pendingUnbonds:store.chainState().pendingUnbonds.filter(x=>x.address===wallet.address).map(x=>({...x,atomic:String(x.atomic)})),epochBlocks:c.validatorEpochBlocks,unbondDelayBlocks:c.unbondDelayBlocks,bftMaxRounds:c.bftMaxRounds,latestCheckpoint:snapshots.latest()};}
+function validatorStatus(){const head=ledger.head();return {enabled:c.validatorEnabled,fullBftEnabled:c.fullBftEnabled,nodeId:identity.nodeId,bond:store.bondForNode(identity.nodeId),minimumStakeNRN:c.minValidatorStakeNRN,eligibleValidators:ledger.eligibleValidatorIds(Number(head.index)),nextCommittee:ledger.blockCommittee(Number(head.index)+1,head.hash),pendingSlashings:store.pendingSlashings(20),pendingUnbonds:store.chainState().pendingUnbonds.filter(x=>x.address===wallet.address).map(x=>({...x,atomic:String(x.atomic)})),epochBlocks:c.validatorEpochBlocks,unbondDelayBlocks:c.unbondDelayBlocks,bftMaxRounds:c.bftMaxRounds,latestCheckpoint:snapshots.latest()};}
 
 const server=http.createServer(async(req,res)=>{
   try{
     if(!rateOk(req))return json(res,429,{error:'rate limit exceeded'});
     if(req.method==='OPTIONS'){const h=responseHeaders();h['access-control-allow-headers']='content-type,authorization';h['access-control-allow-methods']='GET,POST,OPTIONS';res.writeHead(204,h);return res.end();}
-    if(req.method==='GET'&&req.url==='/api/status'){const head=ledger.head();return json(res,200,{networkId:c.networkId,protocolVersion:c.protocolVersion,node:{...descriptor(),descriptorSignature:undefined},llm:await llm.health(),runtime:{autoModel:c.autoModel,modelProfile:c.modelProfile,hardwareProfile:c.hardwareProfile,detectedRamMiB:c.detectedRamMiB,detectedCpuCores:c.detectedCpuCores,detectedGpuCount:c.detectedGpuCount,detectedGpuVramMiB:c.detectedGpuVramMiB,modelSelectionReason:c.modelSelectionReason},stats:store.stats(),wallet:walletStatus(),security:{mode:c.securityMode,admissionPowBits:c.admissionPowBits,workPowBits:c.workPowBits,encryptedWallet:fs.existsSync(path.join(c.dataDir,'wallet-v2.json')),encryptedIdentity:fs.existsSync(path.join(c.dataDir,'identity-v2.json')),apiRemoteAdminProtected:true,keystoreSecretSource:c.keystoreSecretSource},discovery:{zeroTouch:c.zeroTouchEnabled,publicUrl:c.publicUrl||'',relay:relay.status(),mainline:rendezvous?.status?.()||null},validator:validatorStatus(),evolution:evolution.status(),collectiveEvolution:collective.status(),training:await training.status(),contentNetwork:{...contentStore.stats(),globalInflight:p2pGlobalInflight},maxSupplyNRN:MAX_SUPPLY_NRN,era:currentEra(),ledger:{height:head.index,head:head.hash,totalSupplyNRN:ledger.supply(),finalized:head.finalized!==false,stateRoot:head.stateRoot||'',epoch:head.epoch||0,round:head.round||0,leader:head.leader||'',checkpoint:snapshots.latest()},peers:store.peers().map(p=>({...p,publicKey:undefined,descriptorSignature:undefined}))});}
+    if(req.method==='GET'&&req.url==='/api/status'){const head=ledger.head();return json(res,200,{networkId:c.networkId,protocolVersion:c.protocolVersion,node:{...descriptor(),descriptorSignature:undefined},llm:await llm.health(),runtime:{autoModel:c.autoModel,modelProfile:c.modelProfile,hardwareProfile:c.hardwareProfile,detectedRamMiB:c.detectedRamMiB,detectedCpuCores:c.detectedCpuCores,detectedGpuCount:c.detectedGpuCount,detectedGpuVramMiB:c.detectedGpuVramMiB,modelSelectionReason:c.modelSelectionReason},stats:store.stats(),wallet:walletStatus(),security:{mode:c.securityMode,admissionPowBits:c.admissionPowBits,workPowBits:c.workPowBits,encryptedWallet:fs.existsSync(path.join(c.dataDir,'wallet-v2.json')),encryptedIdentity:fs.existsSync(path.join(c.dataDir,'identity-v2.json')),apiRemoteAdminProtected:true,keystoreSecretSource:c.keystoreSecretSource},discovery:{zeroTouch:c.zeroTouchEnabled,publicUrl:c.publicUrl||'',relay:relay.status(),mainline:rendezvous?.status?.()||null},validator:validatorStatus(),evolution:evolution.status(),collectiveEvolution:collective.status(),training:await training.status(),contentNetwork:{...contentStore.stats(),globalInflight:p2pGlobalInflight},maxSupplyNRN:MAX_SUPPLY_NRN,era:currentEra(),ledger:{height:head.index,head:head.hash,totalSupplyNRN:ledger.supply(),finalized:head.finalized!==false,stateRoot:head.stateRoot||'',validatorSetRoot:head.validatorSetRoot||ledger.validatorSetRoot(Number(head.index)+1),epoch:head.epoch||0,round:head.round||0,leader:head.leader||'',bft:{enabled:c.fullBftEnabled,prevotes:head.consensusCertificate?.prevotes?.length||0,precommits:head.consensusCertificate?.precommits?.length||0},checkpoint:snapshots.latest()},peers:store.peers().map(p=>({...p,publicKey:undefined,descriptorSignature:undefined}))});}
     if(req.method==='GET'&&req.url==='/api/receipts')return json(res,200,{receipts:store.receipts(100)});
     if(req.method==='GET'&&req.url==='/api/ledger')return json(res,200,{head:ledger.head(),totalSupplyNRN:ledger.supply(),balances:ledger.balances(100),mempool:store.mempool(100),blocks:store.blocksFrom(Math.max(0,Number(ledger.head().index)-20),21)});
     if(req.method==='GET'&&req.url==='/api/wallet')return json(res,200,walletStatus());
@@ -269,7 +333,8 @@ const server=http.createServer(async(req,res)=>{
     if(req.method==='POST'&&req.url==='/api/learning/federated/update'){if(!authorizedAdmin(req))return json(res,401,{error:'admin authorization required'});const u=knowledge.makeFederatedUpdate();await broadcastFederatedUpdate(u);return json(res,200,{update:{roundId:u.roundId,nodeId:u.nodeId,vector:u.vector,weight:u.weight}});}
     if(req.method==='POST'&&req.url==='/api/learning/federated/aggregate'){if(!authorizedAdmin(req))return json(res,401,{error:'admin authorization required'});const x=await body(req);const candidate=knowledge.candidateFromAggregate(x.roundId||knowledge.roundId());await broadcastEvolutionCandidate(candidate);return json(res,200,{candidate});}
     if(req.method==='GET'&&req.url==='/api/consensus/checkpoints')return json(res,200,{latest:snapshots.latest(),checkpoints:store.checkpoints(20)});
-    if(req.method==='POST'&&req.url==='/api/consensus/snapshot'){if(!authorizedAdmin(req))return json(res,401,{error:'admin authorization required'});return json(res,200,{snapshot:snapshots.create()});}
+    if(req.method==='POST'&&req.url==='/api/consensus/snapshot'){if(!authorizedAdmin(req))return json(res,401,{error:'admin authorization required'});return json(res,200,{snapshot:await createCertifiedCheckpoint()});}
+    if(req.method==='POST'&&req.url==='/api/consensus/fast-sync'){if(!authorizedAdmin(req))return json(res,401,{error:'admin authorization required'});const x=await body(req);const peer=peerForId(x.nodeId);if(!peer)return json(res,404,{error:'peer not found'});const r=await callPeer(peer,{directPath:'/p2p/consensus/checkpoint/latest',relayKind:'consensus',payload:{kind:'checkpoint-latest'},timeout:10000});if(!r?.checkpoint)return json(res,404,{error:'peer has no certified checkpoint'});return json(res,200,{result:snapshots.importCertified(r.checkpoint)});}
     if(req.method==='POST'&&req.url==='/api/wallet/send'){if(!authorizedAdmin(req))return json(res,401,{error:'admin authorization required'});const x=await body(req);if(!x.to||x.amount===undefined)return json(res,400,{error:'to and amount are required'});return json(res,200,await sendNRN(x));}
     if(req.method==='POST'&&req.url==='/api/validator/bond'){if(!authorizedAdmin(req))return json(res,401,{error:'admin authorization required'});const x=await body(req);if(x.amount===undefined)return json(res,400,{error:'amount required'});return json(res,200,await bondValidator(x));}
     if(req.method==='POST'&&req.url==='/api/validator/unbond'){if(!authorizedAdmin(req))return json(res,401,{error:'admin authorization required'});const x=await body(req);if(x.amount===undefined)return json(res,400,{error:'amount required'});return json(res,200,await unbondValidator(x));}
@@ -284,8 +349,12 @@ const server=http.createServer(async(req,res)=>{
     if(req.method==='POST'&&req.url==='/p2p/infer'){const env=await body(req);if(!guard.verifyEnvelope(env)||env.payload?.networkId!==c.networkId)return json(res,401,{error:'invalid/replayed signature'});return json(res,200,await handleInfer(env.payload.payload));}
     if(req.method==='POST'&&req.url==='/p2p/validate'){const env=await body(req);if(!guard.verifyEnvelope(env)||env.payload?.networkId!==c.networkId)return json(res,401,{error:'invalid/replayed signature'});return json(res,200,await handleValidation(env.payload.payload));}
     if(req.method==='POST'&&req.url==='/p2p/tx'){const env=await body(req);if(!guard.verifyEnvelope(env)||env.payload?.networkId!==c.networkId)return json(res,401,{error:'invalid/replayed signature'});return json(res,200,await handleTransaction(env.payload.tx));}
+    if(req.method==='POST'&&req.url==='/p2p/consensus/proposal'){const env=await body(req);if(!guard.verifyEnvelope(env)||env.payload?.networkId!==c.networkId)return json(res,401,{error:'invalid/replayed signature'});return json(res,200,await handleConsensus(env.payload.payload,env.nodeId));}
+    if(req.method==='POST'&&req.url==='/p2p/consensus/vote'){const env=await body(req);if(!guard.verifyEnvelope(env)||env.payload?.networkId!==c.networkId)return json(res,401,{error:'invalid/replayed signature'});return json(res,200,await handleConsensus(env.payload.payload,env.nodeId));}
+    if(req.method==='POST'&&req.url==='/p2p/consensus/checkpoint-vote'){const env=await body(req);if(!guard.verifyEnvelope(env)||env.payload?.networkId!==c.networkId)return json(res,401,{error:'invalid/replayed signature'});return json(res,200,await handleConsensus(env.payload.payload,env.nodeId));}
+    if(req.method==='POST'&&req.url==='/p2p/consensus/checkpoint/latest'){const env=await body(req);if(!guard.verifyEnvelope(env)||env.payload?.networkId!==c.networkId)return json(res,401,{error:'invalid/replayed signature'});return json(res,200,await handleConsensus(env.payload.payload,env.nodeId));}
     if(req.method==='POST'&&req.url==='/p2p/ledger/validate'){const env=await body(req);if(!guard.verifyEnvelope(env)||env.payload?.networkId!==c.networkId)return json(res,401,{error:'invalid/replayed signature'});return json(res,200,await handleValidation(env.payload.payload));}
-    if(req.method==='POST'&&req.url==='/p2p/ledger/commit'){const env=await body(req);if(!guard.verifyEnvelope(env)||env.payload?.networkId!==c.networkId)return json(res,401,{error:'invalid/replayed signature'});const block=env.payload.block;if(env.nodeId!==block?.proposer)return json(res,401,{error:'proposer mismatch'});const ok=ledger.importBlock(block);return json(res,ok?200:409,{ok,head:ledger.head().hash});}
+    if(req.method==='POST'&&req.url==='/p2p/ledger/commit'){const env=await body(req);if(!guard.verifyEnvelope(env)||env.payload?.networkId!==c.networkId)return json(res,401,{error:'invalid/replayed signature'});const block=env.payload.block;const out=await handleCommit({block},env.nodeId);return json(res,out.ok?200:409,{...out,head:ledger.head().hash});}
     if(req.method==='POST'&&req.url==='/p2p/ledger/blocks'){const env=await body(req);if(!guard.verifyEnvelope(env)||env.payload?.networkId!==c.networkId)return json(res,401,{error:'invalid/replayed signature'});const from=Math.max(0,Number(env.payload.fromIndex)||0),limit=Math.min(100,Math.max(1,Number(env.payload.limit)||50));return json(res,200,{blocks:store.blocksFrom(from,limit),head:ledger.head()});}
     if(req.method==='POST'&&req.url==='/p2p/evolution/candidate'){const env=await body(req);if(!guard.verifyEnvelope(env)||env.payload?.networkId!==c.networkId||env.payload?.type!=='evolution-candidate')return json(res,401,{error:'invalid/replayed signature'});return json(res,200,await handleEvolution({candidateProof:env.payload.candidateProof},env.nodeId));}
     if(req.method==='POST'&&req.url==='/p2p/evolution/collective'){const env=await body(req);if(!guard.verifyEnvelope(env)||env.payload?.networkId!==c.networkId||env.payload?.type!=='collective-evolution-message')return json(res,401,{error:'invalid/replayed signature'});return json(res,200,await handleEvolution(env.payload.payload,env.nodeId));}
@@ -309,12 +378,12 @@ const server=http.createServer(async(req,res)=>{
     if(req.method==='POST'&&req.url==='/p2p/relay/respond')return json(res,200,relay.acceptRespond(await body(req)));
 
     if(req.method==='GET'&&serveStatic(req,res))return;json(res,404,{error:'not found'});
-  }catch(e){console.error(e);json(res,500,{error:e.message});}
+  }catch(e){const m=String(e?.message||'');if(m.startsWith('BFT ')||m.includes('stale proposal'))return json(res,409,{error:m});console.error(e);json(res,500,{error:m});}
 });
 
 server.listen(c.port,c.host,async()=>{
   console.log(`\nNeural Mesh v${c.protocolVersion} node ${identity.nodeId.slice(0,12)} online`);console.log(`UI/API: ${c.publicUrl||`http://127.0.0.1:${c.port} (private/relay mode)`}`);console.log(`LLM: ${c.llmProvider} / ${c.llmModel}${c.autoModel?' (auto-selected)':''}`);console.log(`Compute: ${hw.accelerator} | CPU ${hw.cpuCores} cores | GPU ${hw.gpu.length}`);console.log(`Wallet: ${wallet.address}${c.rewardAddress?` | rewards -> ${c.rewardAddress}`:''}`);console.log(`Security: ${c.securityMode} | admission ${c.admissionPowBits}b | neural-work ${c.workPowBits}b | keystore encrypted/${c.keystoreSecretSource}`);console.log(`Ledger: ${ledger.head().hash.slice(0,12)} | supply ${ledger.supply()} / ${MAX_SUPPLY_NRN}`);console.log(`Discovery: ${c.zeroTouchEnabled?'ZERO-TOUCH':'manual'} | Mainline DHT ${c.mainlineDhtEnabled?'on':'off'} | HTTP ${c.publicUrl||'auto/relay'}`);console.log(`Evolution: ${c.evolutionEnabled?'on':'off'} | champion ${evolution.champion()?.genomeId.slice(0,12)} | auto ${c.evolutionAuto?'on':'off'}`);console.log(`Collective: ${c.collectiveEvolutionEnabled?'on':'off'} | BFT anchor ${c.evolutionBftAnchorEnabled?'on':'off'} | auto ${c.collectiveEvolutionAuto?'on':'off'} | min voters ${c.collectiveEvolutionMinVoters}`);console.log(`Learning: ${c.knowledgeTransferEnabled?'knowledge on':'off'} | federated ${c.federatedLearningEnabled?'on':'off'} | round ${knowledge.roundId()}`);console.log(`Training: ${c.trainingEnabled?'on':'off'} | mode ${c.trainingMode} | base ${c.trainingBaseModel}`);console.log(`Content network: ${c.contentStoreEnabled?'on':'off'} | CAS ${c.contentStoreDir} | replication ${c.contentReplicationFactor}x`);
-  evolution.start();collective.start({broadcastTournament:broadcastCollectiveTournament,broadcastBallot:broadcastCollectiveBallot,broadcastCandidate:broadcastEvolutionCandidate,anchorTournament:anchorCollectiveTournament});training.start({onAdapter:broadcastAdapterManifest});relay.start();await peers.start();await rendezvous.start().catch(e=>console.warn('external rendezvous:',e.message));setInterval(()=>{const p=store.peers().find(x=>peerEndpoint(x));if(p)syncLedgerFrom(p).catch(()=>{});},20000).unref();setInterval(()=>replicationSweep().catch(()=>{}),Math.max(30000,c.contentReplicationIntervalMs)).unref();setTimeout(()=>replicationSweep().catch(()=>{}),5000).unref?.();let lastFedRound='';setInterval(async()=>{if(!c.federatedLearningEnabled)return;const rid=knowledge.roundId();if(rid===lastFedRound)return;lastFedRound=rid;try{const u=knowledge.makeFederatedUpdate();await broadcastFederatedUpdate(u);}catch{}},30000).unref();
+  evolution.start();collective.start({broadcastTournament:broadcastCollectiveTournament,broadcastBallot:broadcastCollectiveBallot,broadcastCandidate:broadcastEvolutionCandidate,anchorTournament:anchorCollectiveTournament});training.start({onAdapter:broadcastAdapterManifest});relay.start();await peers.start();await rendezvous.start().catch(e=>console.warn('external rendezvous:',e.message));setInterval(()=>{const ps=store.peers().filter(x=>peerEndpoint(x)||x.relayUrl).sort((a,b)=>peerQuality(b)-peerQuality(a));for(const p of ps.slice(0,3))syncLedgerFrom(p).catch(()=>{});},Math.max(1000,c.ledgerSyncIntervalMs)).unref();setInterval(()=>replicationSweep().catch(()=>{}),Math.max(30000,c.contentReplicationIntervalMs)).unref();setTimeout(()=>replicationSweep().catch(()=>{}),5000).unref?.();let lastFedRound='';setInterval(async()=>{if(!c.federatedLearningEnabled)return;const rid=knowledge.roundId();if(rid===lastFedRound)return;lastFedRound=rid;try{const u=knowledge.makeFederatedUpdate();await broadcastFederatedUpdate(u);}catch{}},30000).unref();
 });
 function shutdown(){training.stop();collective.stop();evolution.stop();rendezvous?.stop();relay.stop();peers.stop();server.close(()=>{store.close();process.exit(0);});}
 process.on('SIGINT',shutdown);process.on('SIGTERM',shutdown);

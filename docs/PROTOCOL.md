@@ -1,60 +1,70 @@
-# Neural Mesh Protocol v0.10
+# Neural Mesh Protocol v0.13
 
-v0.10 retains the v0.9 P2P, NRN, BFT evolution, knowledge and telemetry protocols and adds model-adapter transfer.
+## BFT block version 6
 
-## Adapter Manifest
+A v6 block commits to:
 
-The author signs an envelope containing `adapterId` and a deterministic manifest. The manifest commits to network ID, author NodeID, exact training base model, Ollama base model, dataset hash (not dataset contents), artifact count, bundle byte length, bundle SHA-256, training metrics and creation time.
-
-`adapterId = SHA256(canonical(manifest-core))`.
-
-## Chunk transfer
-
-Large adapters are never embedded into gossip. A receiver requests `adapter/info`, then `adapter/chunk` sequentially. Default chunk size is 256 KiB. Direct peers use P2P HTTP; relay-only peers use the existing signed learning relay channel. After reassembly the receiver verifies length and SHA-256 against the signed manifest.
-
-## Adapter votes
-
-A peer can sign an `adapter-vote` containing round ID, NodeID, adapter ID and local score. Votes are identity-bound and replay-protected. A local adapter consensus view requires `FEDERATED_MIN_PARTICIPANTS` and a mean score >= `TRAINING_BENCHMARK_MIN_SCORE`.
-
-## Activation
-
-Activation is local, never forced by a remote peer. For Ollama, Neural Mesh unpacks the adapter, creates a derived model with a Modelfile `FROM` + `ADAPTER`, then performs a real inference health check. Failure restores the previous model.
-
-## Data privacy
-
-Raw Knowledge Artifact datasets used for fine-tuning are not exposed by the training P2P protocol. Peers see only signed manifests and adapter bytes.
-
-
-## v0.11 Content-Addressed Model Network
-
-Every binary skill object is addressed by `SHA-256(content)`. The signed adapter manifest carries `contentHash`, `bundleBytes`, model/domain metadata and author proof.
-
-Object discovery/transfer:
-
-1. A provider emits a signed `content-offer`.
-2. Peers record `(contentHash,nodeId,lastSeen,score)`.
-3. A consumer asks `/p2p/content/info` for size/chunk count.
-4. It downloads chunks via `/p2p/content/chunk`.
-5. The complete object is accepted only if SHA-256 equals `contentHash`.
-6. The consumer becomes another provider and may re-announce the object.
-
-Replication is eventually consistent and non-consensus-critical.
-
-Flow control uses global and per-peer in-flight limits. Peer selection prefers higher trust, lower latency and fewer failures.
-
-# v0.12 Consensus Extension
-
-Post-upgrade blocks use `version: 5` and additionally commit to:
-
-- `epoch`
-- `round`
-- deterministic `leader`
+- `index`, `prevHash`, `round`, `epoch`
+- elected `leader`
+- `proposer` + proposer signature
+- `committee` and quorum threshold
+- `validatorSetRoot`
 - `stateRoot`
+- transactions, NRN receipts, slashings, evolution anchors
+- `consensusCertificate.prevotes`
+- `consensusCertificate.precommits`
 
-`stateRoot` is SHA-256 over canonical balances, account nonces, validator bonds and pending delayed unbonds after applying the proposed block.
+The certificate itself is excluded from the block value hash; it proves finality of the already-hashed proposal.
 
-Validator eligibility is evaluated against the chain state immediately before the start of the block's validator epoch. Block committee selection includes `(epoch,height,round,prevHash)` in its deterministic seed, so a later BFT round rotates the selection deterministically.
+## Proposal
 
-Unbond transactions remove validator stake at inclusion height. The principal becomes a pending unbond and is released to the wallet only at `inclusionHeight + UNBOND_DELAY_BLOCKS`. The transaction fee is paid from liquid balance at inclusion.
+For `(height, round, parent)` the leader is selected deterministically from the round committee. A non-leader origin forwards proposal contents to the elected leader. A v6 proposal is rejected if `proposer != leader`.
 
-Signed checkpoints contain `(networkId,height,blockHash,stateRoot,totalSupplyAtomic,validatorEpoch)` and are signed by the local NodeID. They are observability/recovery commitments; v0.12 does not treat an arbitrary single-node checkpoint as sufficient authority to skip canonical block verification.
+## Two-phase voting
+
+Validators verify the proposal independently and sign an envelope:
+
+```text
+type: bft-vote
+phase: prevote | precommit
+height
+round
+blockHash
+prevHash
+validatorId
+approved
+```
+
+Finality requires quorum valid prevotes and quorum valid precommits from the block committee.
+
+## View change
+
+If proposal, prevote or precommit does not reach quorum within the configured round window, the origin increments `round`. Committee seed/leader selection include the round, producing a deterministic next attempt.
+
+## Equivocation
+
+Conflicting BFT votes by the same validator for the same `(height, round, phase)` produce slash evidence. Legacy conflicting `block-vote` evidence remains understood for historical compatibility.
+
+## Validator set root
+
+`validatorSetRoot` hashes the epoch validator snapshot including NodeID and canonical stake/public metadata. Mainnet validation requires local epoch state to reproduce the root.
+
+## Checkpoints
+
+Checkpoint v2 commits:
+
+- checkpoint block
+- canonical serialized state
+- `stateRoot`
+- `validatorSetRoot`
+- total supply
+- validator-set snapshot
+- quorum signatures
+
+Testnet can import a correctly certified checkpoint. Mainnet additionally requires a pinned trusted validator-set root. Future releases should replace this weak-subjectivity pin with a formally specified checkpoint-certificate chain / validator transition proof.
+
+## BFT safety hardening
+
+For each `height/round/phase`, an honest validator persists its first signed BFT vote before returning it. A second request for the same proposal reuses the stored vote; a different `blockHash` is refused. Precommit requests carry the prevote proof and are accepted only when the validator independently verifies prevote quorum.
+
+Finalized block gossip is transport-independent: any authenticated peer may relay a finalized block. The receiver validates the embedded proposer signature, committee, prevote/precommit certificate, `validatorSetRoot`, `stateRoot`, and parent linkage.

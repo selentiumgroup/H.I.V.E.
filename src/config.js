@@ -46,7 +46,7 @@ export function loadConfig(){
   const walletPassword=process.env.WALLET_PASSWORD||generatedSecret||'';
   const nodeKeyPassword=process.env.NODE_KEY_PASSWORD||walletPassword;
   return {
-    protocolVersion:'0.12.0',
+    protocolVersion:'0.13.0',
     port,host,publicUrl,privateNode,
     dataDir,
     networkId:process.env.NETWORK_ID||'neural-mesh-testnet-v7',
@@ -183,6 +183,13 @@ export function loadConfig(){
     bftMaxRounds:int(process.env.BFT_MAX_ROUNDS,4),
     bftRoundTimeoutMs:int(process.env.BFT_ROUND_TIMEOUT_MS,8000),
     snapshotIntervalBlocks:int(process.env.SNAPSHOT_INTERVAL_BLOCKS,securityMode==='mainnet'?1000:25),
+    fullBftEnabled:bool(process.env.FULL_BFT_ENABLED,true),
+    bftPrevoteTimeoutMs:int(process.env.BFT_PREVOTE_TIMEOUT_MS,4000),
+    bftPrecommitTimeoutMs:int(process.env.BFT_PRECOMMIT_TIMEOUT_MS,4000),
+    checkpointQuorumEnabled:bool(process.env.CHECKPOINT_QUORUM_ENABLED,true),
+    ledgerSyncIntervalMs:int(process.env.LEDGER_SYNC_INTERVAL_MS,5000),
+    trustedCheckpointValidatorRoot:(process.env.TRUSTED_CHECKPOINT_VALIDATOR_ROOT||'').trim(),
+    allowUntrustedTestnetFastSync:bool(process.env.ALLOW_UNTRUSTED_TESTNET_FAST_SYNC,true),
 
     rewardPerScore:num(process.env.REWARD_PER_SCORE,0.01),
     rewardWorkerShare:num(process.env.REWARD_WORKER_SHARE,0.80),

@@ -28,6 +28,13 @@ export class Store {
         vote_id TEXT PRIMARY KEY,validator_id TEXT NOT NULL,height INTEGER NOT NULL,round INTEGER NOT NULL,block_hash TEXT NOT NULL,payload TEXT NOT NULL,created_at INTEGER NOT NULL
       );
       CREATE INDEX IF NOT EXISTS idx_validator_votes_slot ON validator_votes(validator_id,height,round);
+      CREATE TABLE IF NOT EXISTS bft_phase_votes(
+        vote_id TEXT PRIMARY KEY,validator_id TEXT NOT NULL,height INTEGER NOT NULL,round INTEGER NOT NULL,phase TEXT NOT NULL,block_hash TEXT NOT NULL,payload TEXT NOT NULL,created_at INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_bft_phase_votes_slot ON bft_phase_votes(validator_id,height,round,phase);
+      CREATE TABLE IF NOT EXISTS fast_sync_state(
+        id INTEGER PRIMARY KEY CHECK(id=1),height INTEGER NOT NULL,block_hash TEXT NOT NULL,state_root TEXT NOT NULL,validator_set_root TEXT NOT NULL,total_supply_atomic TEXT NOT NULL,state TEXT NOT NULL,certificate TEXT NOT NULL,created_at INTEGER NOT NULL
+      );
       CREATE TABLE IF NOT EXISTS slash_evidence(
         evidence_id TEXT PRIMARY KEY,validator_id TEXT NOT NULL,height INTEGER NOT NULL,round INTEGER NOT NULL,payload TEXT NOT NULL,consumed INTEGER NOT NULL DEFAULT 0,created_at INTEGER NOT NULL
       );
@@ -123,14 +130,16 @@ export class Store {
   blockAtIndex(index){const r=this.db.prepare('SELECT payload FROM ledger_blocks WHERE block_index=?').get(Number(index));return r?JSON.parse(r.payload):null;}
   blockByHash(hash){const r=this.db.prepare('SELECT payload FROM ledger_blocks WHERE block_hash=?').get(String(hash));return r?JSON.parse(r.payload):null;}
   allBlocks(){return this.db.prepare('SELECT payload FROM ledger_blocks ORDER BY block_index ASC').all().map(r=>JSON.parse(r.payload));}
-  totalSupplyAtomic(){return this.allBlocks().reduce((s,b)=>s+BigInt(b.mintedAtomic||0),0n);}
+  totalSupplyAtomic(){const f=this.fastSyncState();const base=f?BigInt(f.totalSupplyAtomic):0n;const h=f?Number(f.height):0;return base+this.allBlocks().filter(b=>Number(b.index)>h).reduce((s,b)=>s+BigInt(b.mintedAtomic||0),0n);}
   totalSupply(){return Number(formatNRN(this.totalSupplyAtomic()));}
   chainState(untilHeight=Infinity){
     const balances=new Map(),nonces=new Map(),txIds=new Set(),bonds=new Map(),pendingUnbonds=[];
+    let baseHeight=0;const fsync=this.fastSyncState();
+    if(fsync&&Number(fsync.height)<=Number(untilHeight)){baseHeight=Number(fsync.height);for(const [a,v] of fsync.state.balances||[])balances.set(a,BigInt(v));for(const [a,n] of fsync.state.nonces||[])nonces.set(a,Number(n));for(const x of fsync.state.bonds||[])bonds.set(x.nodeId,{...x,atomic:BigInt(x.atomic),slashedAtomic:BigInt(x.slashedAtomic||0)});for(const x of fsync.state.pendingUnbonds||[])pendingUnbonds.push({...x,atomic:BigInt(x.atomic)});for(const x of fsync.state.txIds||[])txIds.add(x);}
     const delay=Math.max(0,Number(this.config?.unbondDelayBlocks)||0);
     const add=(addr,delta)=>{if(!addr)return;balances.set(addr,(balances.get(addr)||0n)+BigInt(delta));};
     const release=(height)=>{for(let i=pendingUnbonds.length-1;i>=0;i--){const u=pendingUnbonds[i];if(u.releaseHeight<=height){add(u.address,u.atomic);pendingUnbonds.splice(i,1);}}};
-    for(const b of this.allBlocks()){if(Number(b.index)>Number(untilHeight))break;release(Number(b.index));
+    for(const b of this.allBlocks()){if(Number(b.index)<=baseHeight)continue;if(Number(b.index)>Number(untilHeight))break;release(Number(b.index));
       for(const r of b.receipts||[])for(const a of r.allocations||[])add(a.address||a.nodeId,allocationAtomic(a));
       for(const tx of b.transactions||[]){
         const fee=BigInt(tx.feeAtomic||0);const amount=BigInt(tx.amountAtomic||0);
@@ -238,5 +247,11 @@ export class Store {
   checkpoint(height){const r=this.db.prepare('SELECT * FROM consensus_checkpoints WHERE height=?').get(Number(height));return r?{height:Number(r.height),blockHash:r.block_hash,stateRoot:r.state_root,file:r.file,proof:JSON.parse(r.proof||'{}'),createdAt:Number(r.created_at)}:null;}
   latestCheckpoint(){const r=this.db.prepare('SELECT * FROM consensus_checkpoints ORDER BY height DESC LIMIT 1').get();return r?{height:Number(r.height),blockHash:r.block_hash,stateRoot:r.state_root,file:r.file,proof:JSON.parse(r.proof||'{}'),createdAt:Number(r.created_at)}:null;}
   checkpoints(limit=20){return this.db.prepare('SELECT * FROM consensus_checkpoints ORDER BY height DESC LIMIT ?').all(limit).map(r=>({height:Number(r.height),blockHash:r.block_hash,stateRoot:r.state_root,file:r.file,proof:JSON.parse(r.proof||'{}'),createdAt:Number(r.created_at)}));}
+  addBftVote(vote){try{const p=vote?.payload;if(!Identity.verifyEnvelope(vote,Infinity)||p?.type!=='bft-vote'||vote.nodeId!==p.validatorId||!['prevote','precommit'].includes(p.phase))return null;const voteId=crypto.createHash('sha256').update(canonical(vote)).digest('hex');this.db.prepare('INSERT OR IGNORE INTO bft_phase_votes(vote_id,validator_id,height,round,phase,block_hash,payload,created_at) VALUES(?,?,?,?,?,?,?,?)').run(voteId,p.validatorId,Number(p.height),Number(p.round),p.phase,p.blockHash,JSON.stringify(vote),Date.now());const other=this.db.prepare('SELECT payload FROM bft_phase_votes WHERE validator_id=? AND height=? AND round=? AND phase=? AND block_hash<>? ORDER BY created_at ASC LIMIT 1').get(p.validatorId,Number(p.height),Number(p.round),p.phase,p.blockHash);if(!other)return null;const a=JSON.parse(other.payload),pair=[a,vote].sort((x,y)=>String(x.payload.blockHash).localeCompare(String(y.payload.blockHash)));const evidenceId=crypto.createHash('sha256').update(`${p.validatorId}:${Number(p.height)}:${Number(p.round)}:${p.phase}`).digest('hex');const ev={version:2,evidenceId,validatorId:p.validatorId,height:Number(p.height),round:Number(p.round),phase:p.phase,voteA:pair[0],voteB:pair[1],createdAt:Date.now()};this.db.prepare('INSERT OR IGNORE INTO slash_evidence(evidence_id,validator_id,height,round,payload,created_at) VALUES(?,?,?,?,?,?)').run(evidenceId,p.validatorId,Number(p.height),Number(p.round),JSON.stringify(ev),Date.now());return ev;}catch{return null;}}
+  bftVotes(height,round,phase,blockHash){return this.db.prepare('SELECT payload FROM bft_phase_votes WHERE height=? AND round=? AND phase=? AND block_hash=? ORDER BY validator_id').all(Number(height),Number(round),phase,blockHash).map(r=>JSON.parse(r.payload));}
+  bftVoteForSlot(validatorId,height,round,phase){const r=this.db.prepare('SELECT payload FROM bft_phase_votes WHERE validator_id=? AND height=? AND round=? AND phase=? ORDER BY created_at ASC LIMIT 1').get(validatorId,Number(height),Number(round),phase);return r?JSON.parse(r.payload):null;}
+  setFastSyncState(x){this.db.prepare(`INSERT INTO fast_sync_state(id,height,block_hash,state_root,validator_set_root,total_supply_atomic,state,certificate,created_at) VALUES(1,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET height=excluded.height,block_hash=excluded.block_hash,state_root=excluded.state_root,validator_set_root=excluded.validator_set_root,total_supply_atomic=excluded.total_supply_atomic,state=excluded.state,certificate=excluded.certificate,created_at=excluded.created_at`).run(Number(x.height),x.blockHash,x.stateRoot,x.validatorSetRoot,String(x.totalSupplyAtomic),JSON.stringify(x.state),JSON.stringify(x.certificate||{}),Date.now());}
+  fastSyncState(){const r=this.db.prepare('SELECT * FROM fast_sync_state WHERE id=1').get();return r?{height:Number(r.height),blockHash:r.block_hash,stateRoot:r.state_root,validatorSetRoot:r.validator_set_root,totalSupplyAtomic:r.total_supply_atomic,state:JSON.parse(r.state),certificate:JSON.parse(r.certificate||'{}'),createdAt:Number(r.created_at)}:null;}
+
   stats(){const p=Number(this.db.prepare('SELECT COUNT(*) n FROM peers').get().n);const t=Number(this.db.prepare('SELECT COUNT(*) n FROM tasks').get().n);const r=this.db.prepare('SELECT COUNT(*) n FROM receipts').get();const m=this.db.prepare('SELECT COUNT(*) n FROM mempool').get();const se=this.db.prepare('SELECT COUNT(*) n FROM slash_evidence WHERE consumed=0').get();const h=this.ledgerHead();return {peers:p,tasks:t,receipts:Number(r.n),mempool:Number(m.n),pendingSlashings:Number(se.n),validators:this.chainState().bonds.size,ledgerHeight:Number(h.index),totalSupplyNRN:formatNRN(this.totalSupplyAtomic())};}
 }

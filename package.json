@@ -1,9 +1,9 @@
 {
   "name": "neural-mesh",
-  "version": "0.12.0",
+  "version": "0.13.0",
   "private": true,
   "type": "module",
-  "description": "Decentralized neural mesh v0.12 with validator epochs, multi-round BFT rotation, delayed unbonding, state roots/checkpoints, content-addressed skills, federated training and NRN.",
+  "description": "Decentralized neural mesh v0.13 with elected-proposer prevote/precommit BFT, view-change, validator-set roots, certified checkpoint fast-sync, NRN, federated training and content-addressed skills.",
   "engines": {
     "node": ">=22.16.0"
   },
@@ -33,6 +33,8 @@
     "verify-v11": "npm run content-network-test && npm run training-test && npm run explorer-test && npm run learning-bft-test && npm run smoke",
     "foreign-network-test": "node scripts/foreign-network-test.mjs",
     "consensus-test": "node scripts/v12-consensus-test.mjs",
-    "verify-v12": "npm run consensus-test && npm run content-network-test && npm run training-test && npm run explorer-test && npm run learning-bft-test && npm run smoke"
+    "verify-v12": "npm run consensus-test && npm run content-network-test && npm run training-test && npm run explorer-test && npm run learning-bft-test && npm run smoke",
+    "bft-test": "node scripts/v13-bft-test.mjs",
+    "verify-v13": "npm run bft-test && npm run consensus-test && npm run content-network-test && npm run training-test && npm run explorer-test && npm run learning-bft-test"
   }
 }

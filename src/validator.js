@@ -2,6 +2,7 @@ import { Identity } from './identity.js';
 import { verifyClaim, deterministicWorkScore, rewardForScore, currentEra } from './rewards.js';
 import { parseNRN } from './wallet.js';
 import { verifyWorkPow } from './security.js';
+import { BFT_PHASES, uniqueBftVotes } from './bft-state-machine.js';
 
 function IdentityFresh(env,maxSkew){return Identity.verifyEnvelope(env,maxSkew);}
 
@@ -26,5 +27,16 @@ export class Validator {
     let approved=true,reason='ok';
     try{const committee=this.ledger?.blockCommittee(block.index,block.prevHash,Number(block.round||0))||[];if(!committee.includes(this.identity.nodeId))throw new Error('validator not selected for block committee');const v=this.ledger?.verifyProposal(block);if(!v?.ok)throw new Error(v?.reason||'invalid block');}catch(e){approved=false;reason=e.message;}
     return this.identity.envelope({networkId:this.c.networkId,type:'block-vote',blockHash:block.hash,height:Number(block.index),round:Number(block.round||0),prevHash:block.prevHash,approved,reason,validatorId:this.identity.nodeId,rewardAddress:this.c.rewardAddress||this.wallet.address,createdAt:Date.now()});
+  }
+  voteBft(block,phase,phaseProof=[]){
+    if(![BFT_PHASES.PREVOTE,BFT_PHASES.PRECOMMIT].includes(phase))throw new Error('bad BFT phase');
+    const height=Number(block.index),round=Number(block.round||0),existing=this.store.bftVoteForSlot?.(this.identity.nodeId,height,round,phase);
+    if(existing){if(existing.payload?.blockHash===block.hash)return existing;throw new Error(`BFT ${phase} lock: already voted different block at ${height}/${round}`);}
+    let approved=true,reason='ok';try{
+      const v=this.ledger?.verifyProposal(block);if(!v?.ok)throw new Error(v?.reason||'invalid block');const committee=block.committee||[];if(!committee.includes(this.identity.nodeId))throw new Error('validator not selected for block committee');if(block.proposer!==block.leader)throw new Error('non-leader proposal');
+      if(phase===BFT_PHASES.PRECOMMIT){const prevotes=uniqueBftVotes(phaseProof||[],{networkId:this.c.networkId,phase:BFT_PHASES.PREVOTE,height,round,blockHash:block.hash,prevHash:block.prevHash,committee});if(prevotes.length<this.ledger.threshold(committee))throw new Error('precommit requires prevote quorum');}
+    }catch(e){approved=false;reason=e.message;}
+    const vote=this.identity.envelope({networkId:this.c.networkId,type:'bft-vote',phase,blockHash:block.hash,height,round,prevHash:block.prevHash,approved,reason,validatorId:this.identity.nodeId,rewardAddress:this.c.rewardAddress||this.wallet.address,createdAt:Date.now()});
+    this.store.addBftVote?.(vote);return vote;
   }
 }
