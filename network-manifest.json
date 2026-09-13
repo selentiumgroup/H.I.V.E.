@@ -1,7 +1,7 @@
 {
   "format": "neural-mesh-network-manifest-v1",
   "networkId": "neural-mesh-testnet-v7",
-  "protocolVersion": "0.14.0",
+  "protocolVersion": "0.15.0",
   "genesisHash": "ff7e7d15ef2ea664d7a2bdcfc194d3a7beeb90faa32e3b17f48fd92d9a4b70fe",
   "maxSupplyNRN": 86000000000,
   "consensus": {
@@ -18,5 +18,5 @@
     "enabled": true,
     "minActivationDelay": 3
   },
-  "manifestHash": "a9b53fb6aa535ec5aab4ce48057417d3395308e1f74d959dc1854beacae645e7"
+  "manifestHash": "6bd4dd48a85da32e1d50d884fb1677740b58203e59c45ccd5d53af956ccd1b82"
 }

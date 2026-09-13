@@ -22,3 +22,9 @@ Peer discovery accepts protocol versions >= the currently activated minimum. The
 
 ## Network manifest
 `scripts/network-manifest.mjs` deterministically derives a manifest from consensus/security configuration and the existing genesis block. It does not contain timestamps, so identical configuration yields the same manifest hash.
+
+## v0.15 Operator Ceremony
+
+Validator onboarding is offline-first. Each validator signs a public manifest with its existing NodeID key. The ceremony verifies each signed manifest and computes a deterministic validator root over `(nodeId, commitment)` pairs. The ceremony never receives validator private keys.
+
+Release artifacts are referenced by SHA-256. Operators should verify the exact archive before governance voting or deployment. Production launch should pass `mainnet-preflight` before the service is enabled.

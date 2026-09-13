@@ -1,0 +1,19 @@
+services:
+  neuron:
+    build: ../..
+    restart: unless-stopped
+    env_file: ../../.env
+    ports:
+      - "48686:48686"
+      - "48685:48685/udp"
+    volumes:
+      - neural_data:/app/data
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:48686/api/status').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 90s
+    stop_grace_period: 45s
+volumes:
+  neural_data:

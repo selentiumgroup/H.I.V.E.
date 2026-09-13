@@ -1,72 +1,58 @@
-# Neural Mesh v0.14 — Mainnet Packaging & Governance
+# Neural Mesh v0.15
 
-v0.14 adds canonical protocol governance and reproducible network packaging to the v0.13 Full BFT State Machine while preserving NRN, wallets, zero-touch discovery, LoRA/federated learning, CAS replication, Explorer and collective evolution.
+Mainnet ceremony and operator-tooling release on top of v0.14 BFT governance, v0.13 full BFT state machine, NRN ledger, federated learning, LoRA training and content-addressed skills.
 
-## Start
+## Normal node
+
 ```bash
 npm start
 ```
-Existing `data/` from v0.13 can be retained. Before a governance activation, v0.14 continues producing v6 blocks compatible with v0.13.
 
-## Protocol upgrade flow
-```text
-release artifact
-   ↓ SHA-256
-signed upgrade proposal
-   ↓
-validator votes
-   ↓ >= 2/3
-SCHEDULED
-   ↓ activationHeight
-v7 BFT block
-   ├─ protocolVersion
-   ├─ minCompatibleVersion
-   ├─ governanceRoot
-   └─ governanceCertificate
-```
-The first activated block carries the proposal and validator certificate, so a node that missed governance gossip can still verify the upgrade from the canonical block itself.
+## Validator manifest
 
-## Create an upgrade proposal
+Each validator runs this locally after creating its encrypted NodeID:
+
 ```bash
-curl -X POST http://127.0.0.1:48686/api/governance/propose \
-  -H "Authorization: Bearer $API_TOKEN" \
-  -H 'content-type: application/json' \
-  -d '{
-    "targetVersion":"0.15.0",
-    "minCompatibleVersion":"0.15.0",
-    "releaseHash":"<64-char sha256>",
-    "activationHeight":5000,
-    "changes":{"summary":"protocol upgrade"}
-  }'
+VALIDATOR_OPERATOR="operator-name" \
+VALIDATOR_ENDPOINT="https://validator.example:48686" \
+npm run validator-manifest -- validator.json
 ```
 
-## Vote
+The output contains only public identity material and a NodeID signature. Private keys are never exported.
+
+## Genesis ceremony
+
+Collect signed validator manifests and run:
+
 ```bash
-curl -X POST http://127.0.0.1:48686/api/governance/vote \
-  -H "Authorization: Bearer $API_TOKEN" \
-  -H 'content-type: application/json' \
-  -d '{"proposalId":"<id>","approve":true}'
+npm run genesis-ceremony -- --out genesis-ceremony.json validator-a.json validator-b.json validator-c.json validator-d.json
 ```
 
-## Governance state
+The ceremony verifies signatures, uniqueness and NETWORK_ID and emits `validatorRoot`, threshold, genesis hash and ceremony hash.
+
+## Release verification
+
 ```bash
-curl http://127.0.0.1:48686/api/governance
+npm run verify-release -- neural-mesh-v0.15.zip neural-mesh-v0.15.zip.sha256
 ```
 
-## Reproducible network manifest
+## Mainnet preflight
+
 ```bash
-npm run network-manifest -- network-manifest.json
+SECURITY_MODE=mainnet npm run mainnet-preflight
 ```
-The manifest commits to the network ID, genesis hash, BFT epoch/unbond parameters, admission/work PoW settings and governance activation delay. It includes a deterministic `manifestHash`.
 
-## Important mainnet rule
-Upgrade proposals should reference the SHA-256 of the exact released archive/binary. Mainnet validators should independently reproduce or verify that release before voting. `GOVERNANCE_AUTO_VOTE` should remain disabled on mainnet.
+It rejects unsafe settings such as implicit wallet/node passwords, auto bootstrap validators, untrusted testnet fast-sync, auto Ollama installation and weak/missing API admin token.
 
-## Tests
+## Production deployment
+
+- `deploy/systemd/neural-mesh.service`
+- `deploy/docker/docker-compose.production.yml`
+
+Run all v0.15 operator checks:
+
 ```bash
-npm run governance-test
-npm run bft-test
-npm run verify-v14
+npm run operator-test
 ```
 
-See `docs/PROTOCOL.md`, `docs/MAINNET-GAPS.md`, and `RELEASE-NOTES-v0.14.md`.
+See `docs/PROTOCOL.md`, `docs/MAINNET-GAPS.md`, and `RELEASE-NOTES-v0.15.md`.

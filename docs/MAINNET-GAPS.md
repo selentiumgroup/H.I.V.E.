@@ -13,3 +13,10 @@ Remaining hardening includes:
 - canonical mainnet genesis ceremony and independently controlled genesis validators.
 
 Governance intentionally does not self-download or self-execute a voted release. Operators verify the committed artifact and deploy it before activation height.
+
+## v0.15 remaining external requirements
+
+- Independent security audit and reproducible-build infrastructure are still external operational requirements.
+- Hardware-backed validator keys/HSM integration is not implemented by this release.
+- Emergency halt/cancel policy should be finalized by the launch governance constitution before public mainnet; v0.15 deliberately does not add a single-operator kill switch.
+- Public genesis ceremony should be witnessed and its signed artifacts published independently by multiple operators.

@@ -1,9 +1,9 @@
 {
   "name": "neural-mesh",
-  "version": "0.14.0",
+  "version": "0.15.0",
   "private": true,
   "type": "module",
-  "description": "Decentralized neural mesh v0.14 with BFT-governed protocol upgrades, mainnet network manifests, release commitments, compatibility gates, full BFT, NRN, federated training and content-addressed skills.",
+  "description": "Decentralized neural mesh v0.15 with mainnet ceremony/operator tooling, signed validator manifests, emergency governance controls, release verification, full BFT, NRN, federated training and content-addressed skills.",
   "engines": {
     "node": ">=22.16.0"
   },
@@ -38,6 +38,12 @@
     "verify-v13": "npm run bft-test && npm run consensus-test && npm run content-network-test && npm run training-test && npm run explorer-test && npm run learning-bft-test",
     "governance-test": "node scripts/v14-governance-test.mjs",
     "network-manifest": "node scripts/network-manifest.mjs",
-    "verify-v14": "npm run governance-test && npm run bft-test && npm run consensus-test && npm run content-network-test && npm run training-test && npm run explorer-test && npm run learning-bft-test"
+    "verify-v14": "npm run governance-test && npm run bft-test && npm run consensus-test && npm run content-network-test && npm run training-test && npm run explorer-test && npm run learning-bft-test",
+    "validator-manifest": "node scripts/validator-manifest.mjs",
+    "genesis-ceremony": "node scripts/genesis-ceremony.mjs",
+    "verify-release": "node scripts/verify-release.mjs",
+    "operator-test": "node scripts/v15-operator-test.mjs",
+    "verify-v15": "npm run operator-test && npm run governance-test && npm run bft-test && npm run consensus-test",
+    "mainnet-preflight": "node scripts/mainnet-preflight.mjs"
   }
 }
