@@ -1,145 +1,72 @@
-# Neural Mesh v0.13 — BFT State Machine
+# Neural Mesh v0.14 — Mainnet Packaging & Governance
 
-Neural Mesh is a decentralized AI network where each server acts as an autonomous neural node. v0.13 focuses on canonical NRN-chain consensus and checkpoint recovery while retaining the inference, zero-touch discovery, NRN wallet, evolution, federated learning, LoRA training, content-addressed skill network and Explorer from previous releases.
+v0.14 adds canonical protocol governance and reproducible network packaging to the v0.13 Full BFT State Machine while preserving NRN, wallets, zero-touch discovery, LoRA/federated learning, CAS replication, Explorer and collective evolution.
 
 ## Start
-
 ```bash
 npm start
 ```
+Existing `data/` from v0.13 can be retained. Before a governance activation, v0.14 continues producing v6 blocks compatible with v0.13.
 
-The normal inference node remains zero-touch. On testnet it can auto-provision the local LLM runtime as in previous releases.
-
-## v0.13 consensus path
-
+## Protocol upgrade flow
 ```text
-transaction / rewards
-        |
-        v
-height H, round R
-        |
-        v
-ELECTED PROPOSER
-        |
-        v
-PROPOSAL (v6 block)
-        |
-        v
-PREVOTE >= 2/3
-        |
-        v
-PRECOMMIT >= 2/3
-        |
-        v
-FINAL BLOCK
-        |
-        +--> stateRoot
-        +--> validatorSetRoot
-        +--> prevote certificate
-        +--> precommit certificate
+release artifact
+   ↓ SHA-256
+signed upgrade proposal
+   ↓
+validator votes
+   ↓ >= 2/3
+SCHEDULED
+   ↓ activationHeight
+v7 BFT block
+   ├─ protocolVersion
+   ├─ minCompatibleVersion
+   ├─ governanceRoot
+   └─ governanceCertificate
 ```
+The first activated block carries the proposal and validator certificate, so a node that missed governance gossip can still verify the upgrade from the canonical block itself.
 
-If the elected proposer cannot produce a block, the node advances the round and deterministically selects the next leader. A four-validator committee therefore continues when one round-0 leader is offline, provided the remaining committee can still satisfy quorum.
-
-## Validator-set commitment
-
-Every new block commits a deterministic `validatorSetRoot`. The validator set is epoch-based and derived from the canonical state at the epoch boundary. Existing delayed-unbonding and slashing state are included in `stateRoot`.
-
-## Checkpoint fast-sync
-
-A checkpoint contains:
-
-- finalized block and hash;
-- state root;
-- validator-set root;
-- total NRN supply;
-- balances and nonces;
-- validator bonds/jail/slashing state;
-- pending unbonds;
-- confirmed transaction IDs;
-- validator quorum certificate.
-
-Manual checkpoint:
-
+## Create an upgrade proposal
 ```bash
-curl -X POST http://127.0.0.1:48686/api/consensus/snapshot \
+curl -X POST http://127.0.0.1:48686/api/governance/propose \
   -H "Authorization: Bearer $API_TOKEN" \
   -H 'content-type: application/json' \
-  -d '{}'
+  -d '{
+    "targetVersion":"0.15.0",
+    "minCompatibleVersion":"0.15.0",
+    "releaseHash":"<64-char sha256>",
+    "activationHeight":5000,
+    "changes":{"summary":"protocol upgrade"}
+  }'
 ```
 
-Fast-sync from a known peer:
-
+## Vote
 ```bash
-curl -X POST http://127.0.0.1:48686/api/consensus/fast-sync \
+curl -X POST http://127.0.0.1:48686/api/governance/vote \
   -H "Authorization: Bearer $API_TOKEN" \
   -H 'content-type: application/json' \
-  -d '{"nodeId":"<peer-node-id>"}'
+  -d '{"proposalId":"<id>","approve":true}'
 ```
 
-For `SECURITY_MODE=mainnet`, checkpoint import requires:
-
-```env
-TRUSTED_CHECKPOINT_VALIDATOR_ROOT=<64-hex-root>
+## Governance state
+```bash
+curl http://127.0.0.1:48686/api/governance
 ```
 
-This is deliberate: a self-contained checkpoint whose signer set is supplied by the checkpoint itself is not trustless.
-
-## Important settings
-
-```env
-FULL_BFT_ENABLED=true
-VALIDATOR_COUNT=4
-VALIDATOR_QUORUM=3
-VALIDATOR_EPOCH_BLOCKS=100
-BFT_MAX_ROUNDS=4
-BFT_ROUND_TIMEOUT_MS=8000
-BFT_PREVOTE_TIMEOUT_MS=4000
-BFT_PRECOMMIT_TIMEOUT_MS=4000
-LEDGER_SYNC_INTERVAL_MS=5000
-CHECKPOINT_QUORUM_ENABLED=true
+## Reproducible network manifest
+```bash
+npm run network-manifest -- network-manifest.json
 ```
+The manifest commits to the network ID, genesis hash, BFT epoch/unbond parameters, admission/work PoW settings and governance activation delay. It includes a deterministic `manifestHash`.
+
+## Important mainnet rule
+Upgrade proposals should reference the SHA-256 of the exact released archive/binary. Mainnet validators should independently reproduce or verify that release before voting. `GOVERNANCE_AUTO_VOTE` should remain disabled on mainnet.
 
 ## Tests
-
-Core v0.13 test:
-
 ```bash
+npm run governance-test
 npm run bft-test
+npm run verify-v14
 ```
 
-It starts four validators, finalizes a two-phase BFT block, kills the next elected proposer, verifies view-change/finalization by the remaining three validators, creates a certified checkpoint, and starts a fresh fifth node from that checkpoint.
-
-Extended verification:
-
-```bash
-npm run verify-v13
-```
-
-## Test result used for this release
-
-```text
-FULL BFT V0.13 OK
-height: 2
-viewChangeRound: 1
-prevotes: 4
-precommits: 4
-checkpoint fast-sync: OK
-stateRoot match: OK
-```
-
-## Existing subsystems retained
-
-- CPU/GPU adaptive Ollama inference
-- zero-touch peer discovery
-- NRN native wallet and ledger
-- validator staking/unbonding/slashing
-- knowledge transfer and federated policy learning
-- collective evolution and BFT evolution anchors
-- LoRA training engine
-- content-addressed adapter/model network
-- signed network telemetry and Explorer
-
-## Security boundary
-
-v0.13 is appropriate for an adversarial testnet. Although it now uses elected proposers, prevote/precommit certificates and view-change, it is not presented as audited production BFT. Full lock/POL semantics across arbitrary asynchronous competing rounds, formal verification, transport hardening and external audit remain before a public-value mainnet.
+See `docs/PROTOCOL.md`, `docs/MAINNET-GAPS.md`, and `RELEASE-NOTES-v0.14.md`.

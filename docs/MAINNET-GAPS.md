@@ -1,16 +1,15 @@
-# Neural Mesh v0.13 — Remaining Mainnet Gaps
+# Mainnet gaps after v0.14
 
-v0.13 substantially strengthens finality but is still an adversarial-testnet release.
+v0.14 provides BFT-governed protocol activation and release commitments, but public mainnet should still require independent security review and operational ceremony.
 
-Remaining work before a public-value mainnet:
+Remaining hardening includes:
+- audited reproducible container/binary builds across architectures;
+- hardware-wallet/HSM validator keys;
+- formal upgrade cancellation/emergency-halt governance;
+- explicit governance deposit/spam economics;
+- long-running partition and Byzantine-network testing;
+- production QUIC/Noise/libp2p transport replacement;
+- external audit of BFT, ledger, wallet, relay and fast-sync paths;
+- canonical mainnet genesis ceremony and independently controlled genesis validators.
 
-1. **Lock/POL semantics** — full Tendermint/HotStuff-equivalent rules for locked values, valid-round proofs and safe unlocking across arbitrary asynchronous competing rounds.
-2. **Formal safety/liveness analysis** — current implementation is tested, not formally verified.
-3. **Checkpoint trust model** — current mainnet fast-sync deliberately requires a pinned trusted `validatorSetRoot`. A production design should specify verifiable validator-transition/checkpoint chains and weak-subjectivity rules.
-4. **Authenticated state tree** — stateRoot is deterministic SHA-256 over canonical state, not yet a Merkle/Verkle tree with compact inclusion proofs.
-5. **State snapshot chunk proofs** — current checkpoint state is a signed canonical bundle; large-state production sync needs content-addressed chunks and per-chunk authenticated proofs.
-6. **Production transport** — signed HTTP/relay overlay remains; Noise/QUIC/libp2p-class transport hardening is not complete.
-7. **Validator lifecycle governance** — epoch transitions need audited join/exit limits, key rotation and emergency governance.
-8. **HSM/hardware-wallet validator keys**.
-9. **Reproducible builds and external security audit**.
-10. **Load/adversarial testing** at hundreds/thousands of validators and high packet loss/partition rates.
+Governance intentionally does not self-download or self-execute a voted release. Operators verify the committed artifact and deploy it before activation height.

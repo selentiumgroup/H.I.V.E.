@@ -92,11 +92,28 @@ export class Store {
       CREATE TABLE IF NOT EXISTS consensus_checkpoints(
         height INTEGER PRIMARY KEY,block_hash TEXT NOT NULL,state_root TEXT NOT NULL,file TEXT NOT NULL DEFAULT '',proof TEXT NOT NULL DEFAULT '{}',created_at INTEGER NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS governance_proposals(
+        proposal_id TEXT PRIMARY KEY,author_node_id TEXT NOT NULL,target_version TEXT NOT NULL,min_compatible_version TEXT NOT NULL,release_hash TEXT NOT NULL,activation_height INTEGER NOT NULL,status TEXT NOT NULL,payload TEXT NOT NULL,proof TEXT NOT NULL,created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS governance_votes(
+        proposal_id TEXT NOT NULL,node_id TEXT NOT NULL,approve INTEGER NOT NULL,proof TEXT NOT NULL,created_at INTEGER NOT NULL,PRIMARY KEY(proposal_id,node_id)
+      );
+      CREATE TABLE IF NOT EXISTS governance_activations(
+        proposal_id TEXT PRIMARY KEY,target_version TEXT NOT NULL,min_compatible_version TEXT NOT NULL,release_hash TEXT NOT NULL,activation_height INTEGER NOT NULL,certificate TEXT NOT NULL,activated INTEGER NOT NULL DEFAULT 0,created_at INTEGER NOT NULL
+      );
     `);
     safe(this.db,"ALTER TABLE peers ADD COLUMN dial_url TEXT NOT NULL DEFAULT ''");
     safe(this.db,"ALTER TABLE peers ADD COLUMN listen_port INTEGER NOT NULL DEFAULT 0");
     safe(this.db,"ALTER TABLE peers ADD COLUMN relay_capable INTEGER NOT NULL DEFAULT 0");
   }
+
+  upsertGovernanceProposal(x){this.db.prepare(`INSERT INTO governance_proposals(proposal_id,author_node_id,target_version,min_compatible_version,release_hash,activation_height,status,payload,proof,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(proposal_id) DO UPDATE SET status=excluded.status,payload=excluded.payload,proof=excluded.proof,updated_at=excluded.updated_at`).run(x.proposalId,x.authorNodeId,x.targetVersion,x.minCompatibleVersion,x.releaseHash,Number(x.activationHeight),x.status||'open',JSON.stringify(x.payload||x),JSON.stringify(x.proof||{}),Number(x.createdAt||Date.now()),Date.now());}
+  governanceProposal(id){const r=this.db.prepare('SELECT * FROM governance_proposals WHERE proposal_id=?').get(id);return r?JSON.parse(r.payload):null;}
+  governanceProposals(){return this.db.prepare('SELECT payload FROM governance_proposals ORDER BY created_at DESC').all().map(r=>JSON.parse(r.payload));}
+  putGovernanceVote(x){this.db.prepare(`INSERT OR REPLACE INTO governance_votes(proposal_id,node_id,approve,proof,created_at) VALUES(?,?,?,?,?)`).run(x.proposalId,x.nodeId,x.approve?1:0,JSON.stringify(x.proof),Number(x.createdAt||Date.now()));}
+  governanceVotes(id){return this.db.prepare('SELECT proof FROM governance_votes WHERE proposal_id=? ORDER BY node_id').all(id).map(r=>JSON.parse(r.proof));}
+  putGovernanceActivation(x){this.db.prepare(`INSERT OR REPLACE INTO governance_activations(proposal_id,target_version,min_compatible_version,release_hash,activation_height,certificate,activated,created_at) VALUES(?,?,?,?,?,?,?,?)`).run(x.proposalId,x.targetVersion,x.minCompatibleVersion,x.releaseHash,Number(x.activationHeight),JSON.stringify(x.certificate||{}),x.activated?1:0,Date.now());}
+  governanceActivations(){return this.db.prepare('SELECT * FROM governance_activations ORDER BY activation_height').all().map(r=>({proposalId:r.proposal_id,targetVersion:r.target_version,minCompatibleVersion:r.min_compatible_version,releaseHash:r.release_hash,activationHeight:Number(r.activation_height),certificate:JSON.parse(r.certificate||'{}'),activated:!!r.activated,createdAt:Number(r.created_at)}));}
   close(){try{this.db.close();}catch{}}
   hasPeer(nodeId){return !!this.db.prepare('SELECT 1 x FROM peers WHERE node_id=?').get(nodeId);}
   purgeForeignPeers(networkId){const r=this.db.prepare("DELETE FROM peers WHERE network_id<>'' AND network_id<>?").run(String(networkId||''));return Number(r.changes||0);}

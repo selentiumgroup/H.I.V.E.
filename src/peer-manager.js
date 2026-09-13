@@ -10,8 +10,8 @@ function httpUrl(ip,port){
 }
 
 export class PeerManager {
-  constructor({config,identity,store,descriptor,dht,onPeer,onRelayCandidate,onPublicUrl,guard}){
-    this.c=config;this.identity=identity;this.store=store;this.descriptor=descriptor;this.dht=dht;this.onPeer=onPeer;this.onRelayCandidate=onRelayCandidate;this.onPublicUrl=onPublicUrl;this.guard=guard;this.socket=null;this.timers=[];this.seeds=new Set();this.reachabilityBusy=false;
+  constructor({config,identity,store,descriptor,dht,onPeer,onRelayCandidate,onPublicUrl,guard,isPeerCompatible=null}){
+    this.c=config;this.identity=identity;this.store=store;this.descriptor=descriptor;this.dht=dht;this.onPeer=onPeer;this.onRelayCandidate=onRelayCandidate;this.onPublicUrl=onPublicUrl;this.guard=guard;this.isPeerCompatible=isPeerCompatible||(()=>true);this.socket=null;this.timers=[];this.seeds=new Set();this.reachabilityBusy=false;
   }
   async start(){
     const purged=this.store.purgeForeignPeers?.(this.c.networkId)||0;if(purged)console.log(`[p2p] purged ${purged} cached peer(s) from foreign NETWORK_ID`);
@@ -56,7 +56,7 @@ export class PeerManager {
     const st=Date.now();
     const res=await postJson(url,'/p2p/hello',this.identity.envelope({networkId:this.c.networkId,descriptor:this.descriptor()}),8000);
     if(res?.foreignNetwork||res?.networkId!==this.c.networkId){this.seeds.delete(url);return null;}
-    if(!res.descriptor||!this.guard.verifyDescriptor(res.descriptor))return null;
+    if(!res.descriptor||!this.guard.verifyDescriptor(res.descriptor))return null;if(!this.isPeerCompatible(res.descriptor.protocolVersion)){this.seeds.delete(url);return null;}
     if(res.descriptor.nodeId===this.identity.nodeId)return null;
     const p={...res.descriptor,latencyMs:Date.now()-st};
     this.store.upsertPeer(p,{dialUrl:url});this.store.setPeerMetrics(p.nodeId,p.latencyMs,true);this.addSeed(url);
@@ -71,7 +71,7 @@ export class PeerManager {
       if(!replay.ok&&replay.status!=='duplicate')throw new Error('invalid hello envelope');
     }else if(!this.guard.verifyEnvelope(env))throw new Error('invalid hello envelope');
     if(env.payload?.networkId!==this.c.networkId)return {ok:false,foreignNetwork:true,networkId:this.c.networkId,protocolVersion:this.c.protocolVersion};
-    const p=env.payload.descriptor;if(!p?.nodeId||p.nodeId!==env.nodeId||!this.guard.verifyDescriptor(p))throw new Error('invalid descriptor/admission');
+    const p=env.payload.descriptor;if(!p?.nodeId||p.nodeId!==env.nodeId||!this.guard.verifyDescriptor(p))throw new Error('invalid descriptor/admission');if(!this.isPeerCompatible(p.protocolVersion))return {ok:false,incompatibleProtocol:true,networkId:this.c.networkId,protocolVersion:this.c.protocolVersion};
     if(replay?.status!=='duplicate'){const dialUrl=httpUrl(remoteIp,Number(p.listenPort));this.store.upsertPeer(p,{dialUrl});if(dialUrl)this.addSeed(dialUrl);}
     return {networkId:this.c.networkId,protocolVersion:this.c.protocolVersion,descriptor:this.descriptor(),peers:this.dht.localClosest(env.nodeId),observedIp:remoteIp||'',ledger:null,duplicate:replay?.status==='duplicate'};
   }
@@ -102,7 +102,7 @@ export class PeerManager {
       if(!replay.ok)throw new Error('invalid gossip');
     }else if(!this.guard.verifyEnvelope(env))throw new Error('invalid gossip');
     if(env.payload?.networkId!==this.c.networkId)return {ok:true,ignored:true,foreignNetwork:true,networkId:this.c.networkId};
-    for(const p of env.payload.peers||[])if(p.nodeId!==this.identity.nodeId&&this.guard.verifyDescriptor(p)){this.store.upsertPeer(p);if(p.url){this.addSeed(p.url);queueMicrotask(()=>this.join(p.url,{source:'gossip'}).catch(()=>{}));}}
+    for(const p of env.payload.peers||[])if(p.nodeId!==this.identity.nodeId&&this.guard.verifyDescriptor(p)&&this.isPeerCompatible(p.protocolVersion)){this.store.upsertPeer(p);if(p.url){this.addSeed(p.url);queueMicrotask(()=>this.join(p.url,{source:'gossip'}).catch(()=>{}));}}
     return {ok:true,duplicate:false};
   }
 }

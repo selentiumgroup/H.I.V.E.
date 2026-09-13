@@ -46,7 +46,9 @@ export function loadConfig(){
   const walletPassword=process.env.WALLET_PASSWORD||generatedSecret||'';
   const nodeKeyPassword=process.env.NODE_KEY_PASSWORD||walletPassword;
   return {
-    protocolVersion:'0.13.0',
+    protocolVersion:'0.14.0',
+    baseProtocolVersion:'0.13.0',
+    baseMinCompatibleVersion:'0.13.0',
     port,host,publicUrl,privateNode,
     dataDir,
     networkId:process.env.NETWORK_ID||'neural-mesh-testnet-v7',
@@ -190,6 +192,9 @@ export function loadConfig(){
     ledgerSyncIntervalMs:int(process.env.LEDGER_SYNC_INTERVAL_MS,5000),
     trustedCheckpointValidatorRoot:(process.env.TRUSTED_CHECKPOINT_VALIDATOR_ROOT||'').trim(),
     allowUntrustedTestnetFastSync:bool(process.env.ALLOW_UNTRUSTED_TESTNET_FAST_SYNC,true),
+    governanceEnabled:bool(process.env.GOVERNANCE_ENABLED,true),
+    governanceMinActivationDelay:int(process.env.GOVERNANCE_MIN_ACTIVATION_DELAY,securityMode==='mainnet'?1000:3),
+    governanceAutoVote:bool(process.env.GOVERNANCE_AUTO_VOTE,false),
 
     rewardPerScore:num(process.env.REWARD_PER_SCORE,0.01),
     rewardWorkerShare:num(process.env.REWARD_WORKER_SHARE,0.80),
