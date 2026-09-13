@@ -1,0 +1,2 @@
+# hive
+Decentralized Intelligence
