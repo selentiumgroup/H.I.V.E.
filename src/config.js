@@ -46,7 +46,7 @@ export function loadConfig(){
   const walletPassword=process.env.WALLET_PASSWORD||generatedSecret||'';
   const nodeKeyPassword=process.env.NODE_KEY_PASSWORD||walletPassword;
   return {
-    protocolVersion:'0.15.0',
+    protocolVersion:'0.16.0',
     baseProtocolVersion:'0.13.0',
     baseMinCompatibleVersion:'0.13.0',
     port,host,publicUrl,privateNode,
@@ -197,6 +197,10 @@ export function loadConfig(){
     governanceAutoVote:bool(process.env.GOVERNANCE_AUTO_VOTE,false),
     governanceEmergencyEnabled:bool(process.env.GOVERNANCE_EMERGENCY_ENABLED,true),
     governanceEmergencyThreshold:num(process.env.GOVERNANCE_EMERGENCY_THRESHOLD,0.67),
+    constitutionEnabled:bool(process.env.CONSTITUTION_ENABLED,true),
+    constitutionMinProtocolVersion:process.env.CONSTITUTION_MIN_PROTOCOL_VERSION||'0.16.0',
+    constitutionRecoveryDelayBlocks:int(process.env.CONSTITUTION_RECOVERY_DELAY_BLOCKS,securityMode==='mainnet'?1000:2),
+    constitutionMaxRecoveryValidators:int(process.env.CONSTITUTION_MAX_RECOVERY_VALIDATORS,16),
     operatorManifestPath:path.resolve(process.env.OPERATOR_MANIFEST_PATH||'./network-manifest.json'),
 
     rewardPerScore:num(process.env.REWARD_PER_SCORE,0.01),

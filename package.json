@@ -1,9 +1,9 @@
 {
   "name": "neural-mesh",
-  "version": "0.15.0",
+  "version": "0.16.0",
   "private": true,
   "type": "module",
-  "description": "Decentralized neural mesh v0.15 with mainnet ceremony/operator tooling, signed validator manifests, emergency governance controls, release verification, full BFT, NRN, federated training and content-addressed skills.",
+  "description": "Decentralized neural mesh v0.16 with mainnet constitution, BFT emergency governance, upgrade cancellation, multi-party recovery, full BFT, NRN, federated training and content-addressed skills.",
   "engines": {
     "node": ">=22.16.0"
   },
@@ -44,6 +44,8 @@
     "verify-release": "node scripts/verify-release.mjs",
     "operator-test": "node scripts/v15-operator-test.mjs",
     "verify-v15": "npm run operator-test && npm run governance-test && npm run bft-test && npm run consensus-test",
-    "mainnet-preflight": "node scripts/mainnet-preflight.mjs"
+    "mainnet-preflight": "node scripts/mainnet-preflight.mjs",
+    "constitution-test": "node scripts/v16-constitution-test.mjs",
+    "verify-v16": "npm run constitution-test && npm run operator-test && npm run governance-test && npm run bft-test && npm run consensus-test"
   }
 }

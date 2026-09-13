@@ -1,7 +1,7 @@
 {
   "format": "neural-mesh-network-manifest-v1",
   "networkId": "neural-mesh-testnet-v7",
-  "protocolVersion": "0.15.0",
+  "protocolVersion": "0.16.0",
   "genesisHash": "ff7e7d15ef2ea664d7a2bdcfc194d3a7beeb90faa32e3b17f48fd92d9a4b70fe",
   "maxSupplyNRN": 86000000000,
   "consensus": {
@@ -18,5 +18,16 @@
     "enabled": true,
     "minActivationDelay": 3
   },
-  "manifestHash": "6bd4dd48a85da32e1d50d884fb1677740b58203e59c45ccd5d53af956ccd1b82"
+  "constitution": {
+    "enabled": true,
+    "minProtocolVersion": "0.16.0",
+    "recoveryDelayBlocks": 2,
+    "immutable": {
+      "maxSupplyNRN": "86000000000.00000000",
+      "quorumRule": "floor(2n/3)+1",
+      "privateKeyRecovery": false,
+      "singleOperatorEmergencyControl": false
+    }
+  },
+  "manifestHash": "4123f8e05248c2484f035dcfc8fb3f6ab228a8238616a8a7bb07221219abce1a"
 }

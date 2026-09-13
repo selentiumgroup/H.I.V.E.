@@ -101,6 +101,21 @@ export class Store {
       CREATE TABLE IF NOT EXISTS governance_activations(
         proposal_id TEXT PRIMARY KEY,target_version TEXT NOT NULL,min_compatible_version TEXT NOT NULL,release_hash TEXT NOT NULL,activation_height INTEGER NOT NULL,certificate TEXT NOT NULL,activated INTEGER NOT NULL DEFAULT 0,created_at INTEGER NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS governance_cancellations(
+        proposal_id TEXT PRIMARY KEY,certificate TEXT NOT NULL,created_at INTEGER NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS constitution_actions(
+        action_id TEXT PRIMARY KEY,author_node_id TEXT NOT NULL,type TEXT NOT NULL,status TEXT NOT NULL,payload TEXT NOT NULL,proof TEXT NOT NULL,created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS constitution_votes(
+        action_id TEXT NOT NULL,node_id TEXT NOT NULL,approve INTEGER NOT NULL,proof TEXT NOT NULL,created_at INTEGER NOT NULL,PRIMARY KEY(action_id,node_id)
+      );
+      CREATE TABLE IF NOT EXISTS constitution_state(
+        id INTEGER PRIMARY KEY CHECK(id=1),halted INTEGER NOT NULL DEFAULT 0,last_action_id TEXT NOT NULL DEFAULT '',last_certificate TEXT NOT NULL DEFAULT '{}',updated_at INTEGER NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS recovery_authorizations(
+        action_id TEXT PRIMARY KEY,old_validator_id TEXT NOT NULL,new_validator_id TEXT NOT NULL,new_public_key TEXT NOT NULL,new_reward_address TEXT NOT NULL DEFAULT '',eligible_height INTEGER NOT NULL,certificate TEXT NOT NULL,status TEXT NOT NULL DEFAULT 'authorized',created_at INTEGER NOT NULL
+      );
     `);
     safe(this.db,"ALTER TABLE peers ADD COLUMN dial_url TEXT NOT NULL DEFAULT ''");
     safe(this.db,"ALTER TABLE peers ADD COLUMN listen_port INTEGER NOT NULL DEFAULT 0");
@@ -114,6 +129,18 @@ export class Store {
   governanceVotes(id){return this.db.prepare('SELECT proof FROM governance_votes WHERE proposal_id=? ORDER BY node_id').all(id).map(r=>JSON.parse(r.proof));}
   putGovernanceActivation(x){this.db.prepare(`INSERT OR REPLACE INTO governance_activations(proposal_id,target_version,min_compatible_version,release_hash,activation_height,certificate,activated,created_at) VALUES(?,?,?,?,?,?,?,?)`).run(x.proposalId,x.targetVersion,x.minCompatibleVersion,x.releaseHash,Number(x.activationHeight),JSON.stringify(x.certificate||{}),x.activated?1:0,Date.now());}
   governanceActivations(){return this.db.prepare('SELECT * FROM governance_activations ORDER BY activation_height').all().map(r=>({proposalId:r.proposal_id,targetVersion:r.target_version,minCompatibleVersion:r.min_compatible_version,releaseHash:r.release_hash,activationHeight:Number(r.activation_height),certificate:JSON.parse(r.certificate||'{}'),activated:!!r.activated,createdAt:Number(r.created_at)}));}
+  putGovernanceCancellation(proposalId,certificate){this.db.prepare('INSERT OR REPLACE INTO governance_cancellations(proposal_id,certificate,created_at) VALUES(?,?,?)').run(String(proposalId),JSON.stringify(certificate||{}),Date.now());}
+  governanceCancellation(proposalId){const r=this.db.prepare('SELECT * FROM governance_cancellations WHERE proposal_id=?').get(String(proposalId));return r?{proposalId:r.proposal_id,certificate:JSON.parse(r.certificate||'{}'),createdAt:Number(r.created_at)}:null;}
+  governanceCancellations(){return this.db.prepare('SELECT * FROM governance_cancellations ORDER BY created_at').all().map(r=>({proposalId:r.proposal_id,certificate:JSON.parse(r.certificate||'{}'),createdAt:Number(r.created_at)}));}
+  upsertConstitutionAction(x){this.db.prepare(`INSERT INTO constitution_actions(action_id,author_node_id,type,status,payload,proof,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(action_id) DO UPDATE SET status=excluded.status,payload=excluded.payload,proof=excluded.proof,updated_at=excluded.updated_at`).run(x.actionId,x.authorNodeId||'',x.type||'',x.status||'open',JSON.stringify(x),JSON.stringify(x.proof||{}),Number(x.createdAt||Date.now()),Date.now());return this.constitutionAction(x.actionId);}
+  constitutionAction(id){const r=this.db.prepare('SELECT payload FROM constitution_actions WHERE action_id=?').get(String(id));return r?JSON.parse(r.payload):null;}
+  constitutionActions(){return this.db.prepare('SELECT payload FROM constitution_actions ORDER BY created_at DESC').all().map(r=>JSON.parse(r.payload));}
+  putConstitutionVote(x){this.db.prepare('INSERT OR REPLACE INTO constitution_votes(action_id,node_id,approve,proof,created_at) VALUES(?,?,?,?,?)').run(x.actionId,x.nodeId,x.approve?1:0,JSON.stringify(x.proof),Date.now());}
+  constitutionVotes(id){return this.db.prepare('SELECT proof FROM constitution_votes WHERE action_id=? ORDER BY node_id').all(String(id)).map(r=>JSON.parse(r.proof));}
+  setConstitutionState(x){const cur=this.constitutionState();this.db.prepare(`INSERT INTO constitution_state(id,halted,last_action_id,last_certificate,updated_at) VALUES(1,?,?,?,?) ON CONFLICT(id) DO UPDATE SET halted=excluded.halted,last_action_id=excluded.last_action_id,last_certificate=excluded.last_certificate,updated_at=excluded.updated_at`).run(x.halted?1:0,x.lastActionId||cur.lastActionId||'',JSON.stringify(x.lastCertificate||cur.lastCertificate||{}),Date.now());return this.constitutionState();}
+  constitutionState(){const r=this.db.prepare('SELECT * FROM constitution_state WHERE id=1').get();return r?{halted:!!r.halted,lastActionId:r.last_action_id,lastCertificate:JSON.parse(r.last_certificate||'{}'),updatedAt:Number(r.updated_at)}:{halted:false,lastActionId:'',lastCertificate:{},updatedAt:0};}
+  putRecoveryAuthorization(x){this.db.prepare(`INSERT OR REPLACE INTO recovery_authorizations(action_id,old_validator_id,new_validator_id,new_public_key,new_reward_address,eligible_height,certificate,status,created_at) VALUES(?,?,?,?,?,?,?,?,?)`).run(x.actionId,x.oldValidatorId,x.newValidatorId,x.newPublicKey,x.newRewardAddress||'',Number(x.eligibleHeight),JSON.stringify(x.certificate||{}),x.status||'authorized',Date.now());}
+  recoveryAuthorizations(){return this.db.prepare('SELECT * FROM recovery_authorizations ORDER BY created_at DESC').all().map(r=>({actionId:r.action_id,oldValidatorId:r.old_validator_id,newValidatorId:r.new_validator_id,newPublicKey:r.new_public_key,newRewardAddress:r.new_reward_address,eligibleHeight:Number(r.eligible_height),certificate:JSON.parse(r.certificate||'{}'),status:r.status,createdAt:Number(r.created_at)}));}
   close(){try{this.db.close();}catch{}}
   hasPeer(nodeId){return !!this.db.prepare('SELECT 1 x FROM peers WHERE node_id=?').get(nodeId);}
   purgeForeignPeers(networkId){const r=this.db.prepare("DELETE FROM peers WHERE network_id<>'' AND network_id<>?").run(String(networkId||''));return Number(r.changes||0);}
