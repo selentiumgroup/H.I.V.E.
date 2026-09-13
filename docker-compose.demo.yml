@@ -1,0 +1,72 @@
+services:
+  seed:
+    build: .
+    environment:
+      PORT: 48686
+      PUBLIC_URL: http://seed:48686
+      DATA_DIR: /data
+      MOCK_LLM: "true"
+      RELAY_ENABLED: "true"
+      DISCOVERY_ENABLED: "false"
+      DHT_REFRESH_MS: 1000
+      SECURITY_MODE: testnet
+      WALLET_PASSWORD: demo-neural-mesh-password
+      NODE_KEY_PASSWORD: demo-neural-mesh-password
+      API_TOKEN: demo-admin-token
+      AUTO_BOOTSTRAP_VALIDATORS: "true"
+      VALIDATOR_COUNT: 3
+      VALIDATOR_QUORUM: 2
+      ADMISSION_POW_BITS: 6
+      WORK_POW_BITS: 6
+    volumes: [seed-data:/data]
+    ports: ["48686:48686"]
+  neuron-b:
+    build: .
+    depends_on: [seed]
+    environment:
+      PORT: 48686
+      PUBLIC_URL: http://neuron-b:48686
+      BOOTSTRAP_PEERS: http://seed:48686
+      DATA_DIR: /data
+      MOCK_LLM: "true"
+      DISCOVERY_ENABLED: "false"
+      DHT_REFRESH_MS: 1000
+      SECURITY_MODE: testnet
+      WALLET_PASSWORD: demo-neural-mesh-password
+      NODE_KEY_PASSWORD: demo-neural-mesh-password
+      API_TOKEN: demo-admin-token
+      AUTO_BOOTSTRAP_VALIDATORS: "true"
+      VALIDATOR_COUNT: 3
+      VALIDATOR_QUORUM: 2
+      ADMISSION_POW_BITS: 6
+      WORK_POW_BITS: 6
+    volumes: [b-data:/data]
+    ports: ["48687:48686"]
+  neuron-private:
+    build: .
+    depends_on: [seed]
+    environment:
+      PORT: 48686
+      PUBLIC_URL: ""
+      PRIVATE_NODE: "true"
+      BOOTSTRAP_PEERS: http://seed:48686
+      RELAY_PEERS: http://seed:48686
+      DATA_DIR: /data
+      MOCK_LLM: "true"
+      DISCOVERY_ENABLED: "false"
+      DHT_REFRESH_MS: 1000
+      SECURITY_MODE: testnet
+      WALLET_PASSWORD: demo-neural-mesh-password
+      NODE_KEY_PASSWORD: demo-neural-mesh-password
+      API_TOKEN: demo-admin-token
+      AUTO_BOOTSTRAP_VALIDATORS: "true"
+      VALIDATOR_COUNT: 3
+      VALIDATOR_QUORUM: 2
+      ADMISSION_POW_BITS: 6
+      WORK_POW_BITS: 6
+    volumes: [private-data:/data]
+    ports: ["48688:48686"]
+volumes:
+  seed-data:
+  b-data:
+  private-data:

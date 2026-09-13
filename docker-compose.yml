@@ -1,0 +1,52 @@
+services:
+  ollama:
+    image: ollama/ollama:latest
+    volumes:
+      - ollama:/root/.ollama
+    ports:
+      - "11434:11434"
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  neuron:
+    build: .
+    depends_on:
+      ollama:
+        condition: service_healthy
+    environment:
+      PORT: 48686
+      NETWORK_ID: neural-mesh-testnet-v5
+      ZERO_TOUCH_ENABLED: "true"
+      MAINLINE_DHT_ENABLED: "true"
+      AUTO_LOCAL_SECRET: "true"
+      ALLOW_INSECURE_KEYSTORE: "false"
+      API_TOKEN: ${API_TOKEN:-}
+      LLM_PROVIDER: ollama
+      LLM_BASE_URL: http://ollama:11434
+      AUTO_MODEL: ${AUTO_MODEL:-true}
+      MODEL_PROFILE: ${MODEL_PROFILE:-balanced}
+      AUTO_MODEL_MAX: ${AUTO_MODEL_MAX:-qwen3:30b}
+      AUTO_PULL_MODEL: ${AUTO_PULL_MODEL:-true}
+      MODEL_SMOKE_TEST: ${MODEL_SMOKE_TEST:-true}
+      HARDWARE_PROFILE: ${HARDWARE_PROFILE:-unknown}
+      DETECTED_RAM_MIB: ${DETECTED_RAM_MIB:-0}
+      DETECTED_CPU_CORES: ${DETECTED_CPU_CORES:-0}
+      DETECTED_GPU_COUNT: ${DETECTED_GPU_COUNT:-0}
+      DETECTED_GPU_VRAM_MIB: ${DETECTED_GPU_VRAM_MIB:-0}
+      CAPABILITIES: general,reasoning,critic,validator,code
+      RELAY_ENABLED: "true"
+      ADMISSION_POW_BITS: 10
+      WORK_POW_BITS: 8
+    volumes:
+      - neuron-data:/app/data
+    ports:
+      - "48686:48686/tcp"
+      - "48686:48686/udp"
+      - "48685:48685/udp"
+
+volumes:
+  ollama:
+  neuron-data:

@@ -1,0 +1,38 @@
+{
+  "name": "neural-mesh",
+  "version": "0.12.0",
+  "private": true,
+  "type": "module",
+  "description": "Decentralized neural mesh v0.12 with validator epochs, multi-round BFT rotation, delayed unbonding, state roots/checkpoints, content-addressed skills, federated training and NRN.",
+  "engines": {
+    "node": ">=22.16.0"
+  },
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "NODE_ENV=development node --watch src/index.js",
+    "smoke": "node scripts/smoke-test.mjs",
+    "genesis": "node scripts/show-genesis.mjs",
+    "wallet": "node scripts/wallet.mjs",
+    "security-test": "node scripts/smoke-test.mjs",
+    "zero-touch-test": "node scripts/zero-touch-test.mjs",
+    "model-selection-test": "bash scripts/model-selection-test.sh",
+    "evolution-test": "node scripts/evolution-test.mjs",
+    "evolution-network-test": "node scripts/evolution-network-test.mjs",
+    "verify": "npm run runtime-bootstrap-test && npm run model-selection-test && npm run evolution-test && npm run collective-test && npm run evolution-network-test && npm run collective-network-test && npm run smoke && npm run zero-touch-test",
+    "collective-test": "node scripts/collective-evolution-test.mjs",
+    "collective-network-test": "node scripts/collective-network-test.mjs",
+    "runtime-bootstrap-test": "node scripts/index-bootstrap-test.mjs && node scripts/runtime-provision-test.mjs && node scripts/ollama-thinking-test.mjs",
+    "learning-bft-test": "node scripts/v08-learning-bft-test.mjs",
+    "learning-network-test": "node scripts/v08-network-test.mjs",
+    "verify-v08": "npm run learning-bft-test && npm run learning-network-test && npm run collective-network-test && npm run smoke && npm run zero-touch-test",
+    "explorer-test": "node scripts/explorer-test.mjs",
+    "verify-v09": "npm run explorer-test && npm run learning-bft-test && npm run smoke",
+    "training-test": "node scripts/v10-training-test.mjs",
+    "verify-v10": "npm run training-test && npm run explorer-test && npm run learning-bft-test && npm run smoke",
+    "content-network-test": "node scripts/v11-content-network-test.mjs",
+    "verify-v11": "npm run content-network-test && npm run training-test && npm run explorer-test && npm run learning-bft-test && npm run smoke",
+    "foreign-network-test": "node scripts/foreign-network-test.mjs",
+    "consensus-test": "node scripts/v12-consensus-test.mjs",
+    "verify-v12": "npm run consensus-test && npm run content-network-test && npm run training-test && npm run explorer-test && npm run learning-bft-test && npm run smoke"
+  }
+}
