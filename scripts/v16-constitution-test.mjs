@@ -1,5 +1,6 @@
 import fs from 'node:fs';import os from 'node:os';import path from 'node:path';
 import { loadConfig } from '../src/config.js';import { Identity } from '../src/identity.js';import { Wallet } from '../src/wallet.js';import { Store } from '../src/db.js';import { Ledger } from '../src/ledger.js';import { Governance } from '../src/governance.js';import { Constitution } from '../src/constitution.js';
+process.env.AUTO_LOCAL_SECRET ??= 'false';
 const root=fs.mkdtempSync(path.join(os.tmpdir(),'nm16-'));
 const ids=[];for(let i=0;i<4;i++){const d=path.join(root,'id'+i);fs.mkdirSync(d,{recursive:true});ids.push(new Identity(d,{password:'test-password-123456789',allowInsecure:false}));}
 const c={...loadConfig(),dataDir:path.join(root,'node'),networkId:'nm-v16-test',securityMode:'testnet',protocolVersion:'0.16.0',baseProtocolVersion:'0.13.0',baseMinCompatibleVersion:'0.13.0',bootstrapValidatorIds:ids.map(x=>x.nodeId),bootstrapValidatorUntilHeight:1000,autoBootstrapValidators:false,allowSingleValidator:false,validatorCount:4,validatorQuorum:3,validatorEpochBlocks:100,minValidatorStakeNRN:'0.00100000',governanceMinActivationDelay:1,constitutionEnabled:true,constitutionRecoveryDelayBlocks:2,capabilities:['validator']};

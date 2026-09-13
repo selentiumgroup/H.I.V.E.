@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { encryptJson, decryptJson } from './keystore.js';
+import { encryptJson, decryptJsonWithFallback } from './keystore.js';
 
 export function canonical(value) {
   if (value === null || typeof value !== 'object') return JSON.stringify(value);
@@ -10,12 +10,17 @@ export function canonical(value) {
 }
 
 export class Identity {
-  constructor(dataDir,{password='',allowInsecure=false}={}) {
+  constructor(dataDir,{password='',fallbackPasswords=[],allowInsecure=false}={}) {
     fs.mkdirSync(dataDir,{ recursive:true });
     this.secureFile=path.join(dataDir,'identity-v2.json');this.legacyFile=path.join(dataDir,'identity.json');
     let x=null;
     if(fs.existsSync(this.secureFile)){
-      x=decryptJson(JSON.parse(fs.readFileSync(this.secureFile,'utf8')),password);
+      const blob=JSON.parse(fs.readFileSync(this.secureFile,'utf8'));
+      const result=decryptJsonWithFallback(blob,[password,...fallbackPasswords]);x=result.payload;
+      if(password&&result.password!==password){
+        const bak=this.secureFile+'.pre-migration-'+Date.now()+'.bak';fs.copyFileSync(this.secureFile,bak);fs.writeFileSync(this.secureFile,JSON.stringify(encryptJson(x,password),null,2),{mode:0o600});
+        console.log(`[keystore] node identity migrated to current password; backup=${bak}`);
+      }
     }else if(fs.existsSync(this.legacyFile)){
       const legacy=JSON.parse(fs.readFileSync(this.legacyFile,'utf8'));
       x=legacy;

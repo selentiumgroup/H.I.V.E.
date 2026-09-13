@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { canonical } from './identity.js';
-import { encryptJson, decryptJson } from './keystore.js';
+import { encryptJson, decryptJsonWithFallback } from './keystore.js';
 
 const A=['ba','be','bi','bo','bu','da','de','di','do','du','ka','ke','ki','ko','ku','la'];
 const B=['na','ne','ni','no','nu','ra','re','ri','ro','ru','sa','se','si','so','su','ta'];
@@ -36,10 +36,14 @@ function verifySignedTx(tx,networkId,allowedTypes){
 }
 
 export class Wallet {
-  constructor(dataDir,{mnemonic='',password='',allowInsecure=false}={}){
+  constructor(dataDir,{mnemonic='',password='',fallbackPasswords=[],allowInsecure=false}={}){
     fs.mkdirSync(dataDir,{recursive:true});this.secureFile=path.join(dataDir,'wallet-v2.json');this.legacyFile=path.join(dataDir,'wallet.json');let x=null;
     if(fs.existsSync(this.secureFile)){
-      const blob=JSON.parse(fs.readFileSync(this.secureFile,'utf8'));x=decryptJson(blob,password);
+      const blob=JSON.parse(fs.readFileSync(this.secureFile,'utf8'));const result=decryptJsonWithFallback(blob,[password,...fallbackPasswords]);x=result.payload;
+      if(password&&result.password!==password){
+        const bak=this.secureFile+'.pre-migration-'+Date.now()+'.bak';fs.copyFileSync(this.secureFile,bak);fs.writeFileSync(this.secureFile,JSON.stringify(encryptJson(x,password),null,2),{mode:0o600});
+        console.log(`[keystore] NRN wallet migrated to current password; backup=${bak}`);
+      }
     }else if(fs.existsSync(this.legacyFile)){
       const legacy=JSON.parse(fs.readFileSync(this.legacyFile,'utf8'));x=legacy;
       if(password){fs.writeFileSync(this.secureFile,JSON.stringify(encryptJson(legacy,password),null,2),{mode:0o600});try{fs.renameSync(this.legacyFile,this.legacyFile+'.migrated.bak');}catch{}}

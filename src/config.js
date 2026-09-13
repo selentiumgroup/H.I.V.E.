@@ -22,9 +22,12 @@ function int(v,d){ const n=Number.parseInt(v??'',10); return Number.isFinite(n)?
 function num(v,d){ const n=Number(v); return Number.isFinite(n)?n:d; }
 function list(v=''){ return String(v).split(',').map(x=>x.trim().replace(/\/$/,'')).filter(Boolean); }
 function localIPv4(){ for(const xs of Object.values(os.networkInterfaces())) for(const x of xs??[]) if(x.family==='IPv4'&&!x.internal)return x.address; return '127.0.0.1'; }
+function readLocalSecret(dataDir){const f=path.join(dataDir,'.local-keystore-secret');try{const x=fs.readFileSync(f,'utf8').trim();if(x.length>=32)return x;}catch{}return '';}
 function ensureLocalSecret(dataDir){
   fs.mkdirSync(dataDir,{recursive:true});const f=path.join(dataDir,'.local-keystore-secret');
-  try{const x=fs.readFileSync(f,'utf8').trim();if(x.length>=32)return x;}catch{}
+  const existing=readLocalSecret(dataDir);if(existing)return existing;
+  const hasEncrypted=fs.existsSync(path.join(dataDir,'identity-v2.json'))||fs.existsSync(path.join(dataDir,'wallet-v2.json'));
+  if(hasEncrypted)return '';
   const x=crypto.randomBytes(32).toString('base64url');fs.writeFileSync(f,x+'\n',{mode:0o600});return x;
 }
 
@@ -42,10 +45,14 @@ export function loadConfig(){
   const explicitWalletPassword=!!process.env.WALLET_PASSWORD;
   const explicitNodeKeyPassword=!!process.env.NODE_KEY_PASSWORD;
   const autoLocalSecret=bool(process.env.AUTO_LOCAL_SECRET,true);
+  const existingLocalSecret=readLocalSecret(dataDir);
   const generatedSecret=(securityMode!=='mainnet'&&!explicitWalletPassword&&!explicitNodeKeyPassword&&autoLocalSecret)?ensureLocalSecret(dataDir):'';
   const walletPassword=process.env.WALLET_PASSWORD||generatedSecret||'';
   const nodeKeyPassword=process.env.NODE_KEY_PASSWORD||walletPassword;
+  const legacyWalletPasswords=[process.env.LEGACY_WALLET_PASSWORD||'',existingLocalSecret,process.env.LEGACY_NODE_KEY_PASSWORD||''].filter(Boolean);
+  const legacyNodeKeyPasswords=[process.env.LEGACY_NODE_KEY_PASSWORD||'',existingLocalSecret,process.env.LEGACY_WALLET_PASSWORD||''].filter(Boolean);
   return {
+    softwareVersion:'1.0.0',
     protocolVersion:'0.16.0',
     baseProtocolVersion:'0.13.0',
     baseMinCompatibleVersion:'0.13.0',
@@ -154,7 +161,7 @@ export function loadConfig(){
     dhtRefreshMs:int(process.env.DHT_REFRESH_MS,15000),
 
     securityMode,
-    nodeKeyPassword,walletPassword,autoLocalSecret,
+    nodeKeyPassword,walletPassword,legacyWalletPasswords,legacyNodeKeyPasswords,autoLocalSecret,
     keystoreSecretSource:generatedSecret?'auto-local':(walletPassword?'environment':'none'),
     explicitWalletPassword,explicitNodeKeyPassword,
     allowInsecureKeystore:bool(process.env.ALLOW_INSECURE_KEYSTORE,!walletPassword&&securityMode!=='mainnet'),

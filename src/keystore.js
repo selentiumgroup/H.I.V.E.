@@ -21,3 +21,13 @@ export function decryptJson(blob,password){
   try{clear=Buffer.concat([decipher.update(ciphertext),decipher.final()]);}catch{key.fill(0);throw new Error('invalid keystore password or corrupted keystore');}
   key.fill(0);try{return JSON.parse(clear.toString('utf8'));}finally{clear.fill(0);}
 }
+
+
+export function decryptJsonWithFallback(blob,passwords=[]){
+  const seen=new Set();let lastError=null;
+  for(const raw of passwords){
+    const password=String(raw||'');if(!password||seen.has(password))continue;seen.add(password);
+    try{return {payload:decryptJson(blob,password),password};}catch(e){lastError=e;}
+  }
+  throw lastError||new Error('no usable keystore password candidate');
+}

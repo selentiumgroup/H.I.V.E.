@@ -1,77 +1,52 @@
-# Neural Mesh v0.16
+# Neural Mesh v1.0 — Mainnet Release Freeze
 
-Mainnet ceremony and operator-tooling release on top of v0.14 BFT governance, v0.13 full BFT state machine, NRN ledger, federated learning, LoRA training and content-addressed skills.
+Neural Mesh v1.0 is the feature-frozen software release of the decentralized AI network developed through v0.1–v0.16. The software version is **1.0.0**; the frozen consensus protocol remains **0.16.0** until a BFT-governed protocol upgrade is explicitly activated.
 
-## v0.16 Mainnet Constitution
+Core capabilities include distributed LLM inference, CPU/GPU auto-provisioning, zero-touch discovery, native NRN wallet/ledger, full BFT consensus and view-change, validator staking/slashing, constitutional governance, collective evolution, federated knowledge transfer, LoRA training, content-addressed skill replication, Explorer telemetry and mainnet operator ceremony tooling.
 
-v0.16 is the final pre-mainnet protocol feature release. It adds a BFT constitutional layer with no master key: emergency halt/resume, scheduled-upgrade cancellation and public validator-identity recovery all require validator quorum certificates. The constitutional invariants permanently keep the 86B NRN cap, the >=2/3 BFT threshold, no private-key recovery, and no single-operator network halt.
-
-Useful endpoints:
-
-```text
-GET  /api/constitution
-POST /api/constitution/propose
-POST /api/constitution/vote
-```
-
-Run the dedicated test with:
-
-```bash
-npm run constitution-test
-```
-
-
-## Normal node
+## Start a normal/testnet node
 
 ```bash
 npm start
 ```
 
-## Validator manifest
+The node will auto-select a local Ollama model where allowed by the selected security profile.
 
-Each validator runs this locally after creating its encrypted NodeID:
+## Mainnet is deliberately not one-click
 
-```bash
-VALIDATOR_OPERATOR="operator-name" \
-VALIDATOR_ENDPOINT="https://validator.example:48686" \
-npm run validator-manifest -- validator.json
-```
-
-The output contains only public identity material and a NodeID signature. Private keys are never exported.
-
-## Genesis ceremony
-
-Collect signed validator manifests and run:
+Public mainnet requires a witnessed genesis ceremony and explicit production secrets. Before a validator starts:
 
 ```bash
-npm run genesis-ceremony -- --out genesis-ceremony.json validator-a.json validator-b.json validator-c.json validator-d.json
+npm run release-audit
+npm run release-freeze
+npm run verify-v1
+npm run mainnet-preflight
 ```
 
-The ceremony verifies signatures, uniqueness and NETWORK_ID and emits `validatorRoot`, threshold, genesis hash and ceremony hash.
+Do **not** use `network-manifest.mainnet.template.json` as a real genesis manifest. It must be replaced by the output of the real multi-party genesis ceremony.
 
-## Release verification
+## Release validation
 
 ```bash
-npm run verify-release -- neural-mesh-v0.16.zip neural-mesh-v0.16.zip.sha256
+npm run release-audit
+npm run chaos-test
+npm run load-test
+npm run verify-v1
 ```
 
-## Mainnet preflight
+`release-manifest.json` commits SHA-256 for every shipped file and a deterministic `releaseRoot`.
 
-```bash
-SECURITY_MODE=mainnet npm run mainnet-preflight
-```
+## Important security status
 
-It rejects unsafe settings such as implicit wallet/node passwords, auto bootstrap validators, untrusted testnet fast-sync, auto Ollama installation and weak/missing API admin token.
+v1.0 is feature-frozen, but the bundled tests are not an independent audit. Before economically valuable public mainnet launch, complete the external audit, multi-region adversarial testnet, operator recovery rehearsal and final genesis ceremony in `docs/MAINNET-LAUNCH-CHECKLIST.md`.
 
-## Production deployment
+## Mainnet invariants
 
-- `deploy/systemd/neural-mesh.service`
-- `deploy/docker/docker-compose.production.yml`
+- Maximum supply: **86,000,000,000 NRN**.
+- Consensus/emergency quorum: `floor(2n/3)+1`.
+- No single-operator network halt/resume.
+- No private-key recovery mechanism.
+- Protocol upgrades require BFT governance and activation height.
+- Finalized state commits `stateRoot` and `validatorSetRoot`.
 
-Run all v0.16 operator checks:
-
-```bash
-npm run operator-test
-```
-
-See `docs/PROTOCOL.md`, `docs/MAINNET-GAPS.md`, and `RELEASE-NOTES-v0.16.md`.
+See `docs/PROTOCOL.md`, `docs/MAINNET-GAPS.md`, and `RELEASE-NOTES-v1.0.md`.
